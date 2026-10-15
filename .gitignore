@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+$env
+
+# Uploaded media
+private_uploads/
+public_uploads/
+uploads/
+
+# Local caches and generated files
+Microsoft/
+coverage/
+dist/
+tmp/
+temp/
+
+# Local email verification script
+test-email.js
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
