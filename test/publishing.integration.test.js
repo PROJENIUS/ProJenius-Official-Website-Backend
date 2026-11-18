@@ -9,7 +9,7 @@ import test, { after, before } from "node:test";
 import mongoose from "mongoose";
 
 let memoryServer, server, api, restoreTransport;
-let Subscriber, Article, Campaign, Delivery, Event, AdminAudit, processWorker, subscribeNewsletter, confirmNewsletter, unsubscribeNewsletter, makeUnsubscribeToken, queuePublication, sendNewsletterWelcomeEmail;
+let Subscriber, Article, Course, Campaign, Delivery, Event, AdminAudit, processWorker, subscribeNewsletter, confirmNewsletter, unsubscribeNewsletter, makeUnsubscribeToken, queuePublication, sendNewsletterWelcomeEmail, sendNewsletterAnnouncementEmail;
 let Admin, hashPassword;
 const emailMessages = [];
 const TEST_DATABASE = "projenius_publishing_isolated_test";
@@ -60,6 +60,7 @@ before(async () => {
   await connectDatabase();
   ({ default: Subscriber } = await import("../src/modules/publishing/newsletterSubscriber.model.js"));
   ({ default: Article } = await import("../src/modules/publishing/contentArticle.model.js"));
+  ({ default: Course } = await import("../src/modules/courses/course.model.js"));
   ({ default: Campaign } = await import("../src/modules/publishing/newsletterCampaign.model.js"));
   ({ default: Delivery } = await import("../src/modules/publishing/newsletterDelivery.model.js"));
   ({ default: Event } = await import("../src/modules/publishing/publicationEvent.model.js"));
@@ -67,9 +68,10 @@ before(async () => {
   ({ default: Admin } = await import("../src/modules/admin/auth/admin.model.js"));
   ({ hashPassword } = await import("../src/modules/admin/auth/auth.service.js"));
   ({ processPublishingWorkerOnce: processWorker, subscribeNewsletter, confirmNewsletter, unsubscribeNewsletter, makeUnsubscribeToken, queuePublication } = await import("../src/modules/publishing/publishing.service.js"));
-  await Promise.all([Subscriber, Article, Campaign, Delivery, Event].map((Model) => Model.createIndexes()));
-  const { setEmailTransportForTests, sendNewsletterWelcomeEmail: sendWelcome } = await import("../src/shared/email/email.service.js");
+  await Promise.all([Subscriber, Article, Course, Campaign, Delivery, Event].map((Model) => Model.createIndexes()));
+  const { setEmailTransportForTests, sendNewsletterWelcomeEmail: sendWelcome, sendNewsletterAnnouncementEmail: sendAnnouncement } = await import("../src/shared/email/email.service.js");
   sendNewsletterWelcomeEmail = sendWelcome;
+  sendNewsletterAnnouncementEmail = sendAnnouncement;
   restoreTransport = setEmailTransportForTests({ async sendMail(message) { emailMessages.push(message); if (failNextEmail) { failNextEmail = false; throw Object.assign(new Error("synthetic failure"), { code: "ETEST" }); } return { messageId: `synthetic-${randomUUID()}` }; } });
   const { default: app } = await import("../src/app.js");
   server = app.listen(0, "127.0.0.1");
@@ -284,6 +286,95 @@ test("News & Insights campaign snapshots and safely renders its category", async
   assert.doesNotMatch(message.html, /<script/i);
 });
 
+test("published course announcements use the saved course data and a course-specific CTA", async () => {
+  const previousSiteOrigin = process.env.PUBLIC_SITE_ORIGIN;
+  const previousApiOrigin = process.env.PUBLIC_API_ORIGIN;
+  process.env.PUBLIC_SITE_ORIGIN = "https://www.projenius.example";
+  process.env.PUBLIC_API_ORIGIN = "https://api.projenius.example";
+  try {
+    const adminId = new mongoose.Types.ObjectId();
+    const slug = `synthetic-course-${randomUUID()}`;
+    const source = await Course.create({
+      title: "Data & Design Foundations",
+      slug,
+      shortDescription: "A synthetic practical course summary.",
+      description: "Synthetic course description for an isolated email test.",
+      category: "Technology & Design",
+      duration: "8 weeks",
+      deliveryMode: "online",
+      priceMinor: 99900,
+      listPriceMinor: 149900,
+      status: "published",
+      publishedAt: new Date(),
+      announcementStatus: "pending",
+      createdBy: adminId,
+      updatedBy: adminId,
+    });
+    const subscriber = await Subscriber.create({ email: "course-campaign@example.invalid", status: "active", confirmedAt: new Date(), consent: { source: "website-footer", acceptedAt: new Date() } });
+    const campaign = await queuePublication({ type: "course", source });
+    await processWorker(new Date(Date.now() + 5_000));
+
+    const delivery = await Delivery.findOne({ campaignId: campaign._id, subscriberId: subscriber._id }).lean();
+    assert.equal(delivery?.status, "sent");
+    const message = emailMessages.findLast((item) => item.to === subscriber.email);
+    assert.ok(message);
+    assert.match(message.subject, /🚀 Ready to Level Up\? Discover Data & Design Foundations at ProJenius/);
+    assert.match(message.html, /Data &amp; Design Foundations/);
+    assert.match(message.html, /Technology &amp; Design/);
+    assert.match(message.html, /A synthetic practical course summary\./);
+    assert.match(message.html, /₹999\.00/);
+    assert.match(message.html, /₹1,499\.00/);
+    assert.match(message.html, /33% off/);
+    assert.match(message.html, /https:\/\/www\.projenius\.example\/services\/courses\/synthetic-course-/);
+    assert.match(message.html, />Explore This Course</);
+    assert.match(message.html, /Unsubscribe/);
+    assert.match(message.html, /<table role="presentation" width="100%"/);
+    assert.doesNotMatch(message.html, /You received this because you subscribed to ProJenius email updates\./);
+    assert.doesNotMatch(message.html, /localhost/i);
+    assert.match(message.text, /Explore This Course: https:\/\/www\.projenius\.example\/services\/courses\//);
+  } finally {
+    process.env.PUBLIC_SITE_ORIGIN = previousSiteOrigin;
+    process.env.PUBLIC_API_ORIGIN = previousApiOrigin;
+  }
+});
+
+test("production course announcement URLs reject localhost and omit a local image URL", async () => {
+  const previousNodeEnvironment = process.env.NODE_ENV;
+  const previousSiteOrigin = process.env.PUBLIC_SITE_ORIGIN;
+  const previousApiOrigin = process.env.PUBLIC_API_ORIGIN;
+  const messageCount = emailMessages.length;
+  process.env.NODE_ENV = "production";
+  process.env.PUBLIC_SITE_ORIGIN = "https://www.projenius.example";
+  process.env.PUBLIC_API_ORIGIN = "https://api.projenius.example";
+  try {
+    const rejected = await sendNewsletterAnnouncementEmail({
+      email: "synthetic-course@example.invalid",
+      unsubscribeUrl: "https://www.projenius.example/newsletter/unsubscribe/synthetic?token=synthetic",
+      listUnsubscribeUrl: "http://localhost:5000/api/newsletter/unsubscribe?id=synthetic&token=synthetic",
+      content: { type: "course", title: "Synthetic course", summary: "Synthetic summary", url: "https://www.projenius.example/services/courses/synthetic-course" },
+    });
+    assert.equal(rejected.status, "failed");
+    assert.equal(emailMessages.length, messageCount, "rejected local production URL does not invoke the mail stub");
+
+    const sent = await sendNewsletterAnnouncementEmail({
+      email: "synthetic-course@example.invalid",
+      unsubscribeUrl: "https://www.projenius.example/newsletter/unsubscribe/synthetic?token=synthetic",
+      listUnsubscribeUrl: "https://api.projenius.example/api/newsletter/unsubscribe?id=synthetic&token=synthetic",
+      content: { type: "course", title: "Synthetic course", summary: "Synthetic summary", url: "https://www.projenius.example/services/courses/synthetic-course", image: "http://localhost:5000/api/courses/assets/synthetic.png" },
+    });
+    assert.equal(sent.status, "sent");
+    const message = emailMessages.at(-1);
+    assert.ok(message);
+    assert.doesNotMatch(message.html, /localhost/i);
+    assert.match(message.html, /https:\/\/www\.projenius\.example\/services\/courses\/synthetic-course/);
+    assert.match(message.html, /Unsubscribe/);
+  } finally {
+    process.env.NODE_ENV = previousNodeEnvironment;
+    process.env.PUBLIC_SITE_ORIGIN = previousSiteOrigin;
+    process.env.PUBLIC_API_ORIGIN = previousApiOrigin;
+  }
+});
+
 test("public article and course asset references never emit localhost and preserve configured HTTPS origins", async () => {
   const previousNodeEnvironment = process.env.NODE_ENV;
   const previousPublicApiOrigin = process.env.PUBLIC_API_ORIGIN;
@@ -404,6 +495,7 @@ test("subscriber administration filters active states and restricts removal to S
   const activeListItem = regularBody.items.find((item) => item._id === String(active._id));
   assert.ok(activeListItem);
   assert.equal(new Date(activeListItem.subscribedAt).toISOString(), "2026-02-03T04:05:00.000Z", "the list returns the actual subscription timestamp");
+  assert.equal(activeListItem.welcomeEmailStatus, "not_queued", "admin can distinguish whether the welcome email has been sent or queued");
   assert.ok(regularBody.items.every((item) => ["active", "unsubscribed"].includes(item.status)));
   const activeOnly = await (await fetch(`${api}/api/admin/newsletter/subscribers?status=active`, { headers: { Cookie: regularSession.cookie } })).json();
   assert.ok(activeOnly.items.some((item) => item._id === String(active._id)));

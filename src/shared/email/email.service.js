@@ -506,3 +506,66 @@ export async function sendNewsletterAnnouncementEmail({ email, content, unsubscr
   try { const result = await mailer.sendMail({ from: `"ProJenius" <${sender}>`, to: email, subject, text, html, headers }); return { status: "sent", messageId: result.messageId }; }
   catch (error) { return { status: "failed", error: getSafeError(error) }; }
 }
+
+// SECTION: CAREER GUIDANCE CALL EMAILS
+export async function sendGuidanceEmails({ booking, slot, receiptPdf, detailsPdf }, channels = { customer: true, admin: true }) {
+  const sender = process.env.GMAIL_USER?.trim();
+  const adminRecipient = process.env.ADMIN_NOTIFICATION_EMAIL?.trim();
+  const statuses = {};
+  if (!sender || !process.env.GMAIL_APP_PASSWORD) {
+    if (channels.customer) statuses.customer = { status: "not_configured" };
+    if (channels.admin) statuses.admin = { status: "not_configured" };
+    return statuses;
+  }
+  let mailer;
+  try { mailer = getTransporter(); } catch {
+    if (channels.customer) statuses.customer = { status: "not_configured" };
+    if (channels.admin) statuses.admin = { status: "not_configured" };
+    return statuses;
+  }
+  const amount = `₹${(booking.amountMinor / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const meet = booking.meetLink || "";
+  const firstName = String(booking.student.name || "").trim().split(/\s+/)[0] || "there";
+  const receiptAttachment = receiptPdf ? [{ filename: `ProJenius-Guidance-Receipt-${booking.reference}.pdf`, content: receiptPdf, contentType: "application/pdf" }] : [];
+
+  if (channels.customer) {
+    const rows = [["Call", `1:1 Career Guidance (${booking.callMinutes} min)`], ["Date & time", `${slot} (IST)`], ["Google Meet", meet || "The link will be shared before the call"], ["Preparing for", booking.targetRole], ["Amount paid", amount], ["Reference", booking.reference], ["Payment ID", booking.paymentId]];
+    statuses.customer = await mailer.sendMail({
+      from: `"ProJenius" <${sender}>`, to: booking.student.email,
+      subject: `Your career guidance call is booked – ${slot}`,
+      text: [`Hi ${firstName},`, "", "Your 1:1 career guidance call with ProJenius is confirmed.", "", ...rows.filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`), "", meet ? `Join here at the time above: ${meet}` : "", "Your payment receipt is attached as a PDF.", "", "Need to change the time? Call +91 89254 50473 or reply to this email.", "Team ProJenius"].filter((line) => line !== "").join("\n"),
+      html: paymentEmailHtml({
+        eyebrow: "PROJENIUS · CAREER GUIDANCE",
+        title: `Your call is booked, ${firstName}!`,
+        intro: ["Your 1:1 career guidance call is confirmed. Join with the Google Meet link at the time below."],
+        rows, receiptAttached: Boolean(receiptPdf),
+        button: meet ? { label: "Join Google Meet", href: meet } : null,
+        footer: ["Need to change the time? Call <a href=\"tel:+918925450473\" style=\"color:#0478a8\">+91 89254 50473</a> or reply to this email.", "Team ProJenius · <a href=\"https://projenius.in\" style=\"color:#0478a8\">projenius.in</a>"],
+      }),
+      attachments: receiptAttachment,
+    }).then((r) => ({ status: "sent", messageId: r.messageId })).catch((error) => ({ status: "failed", error: getSafeError(error) }));
+  }
+
+  if (channels.admin) {
+    if (!adminRecipient) statuses.admin = { status: "not_configured" };
+    else {
+      const panel = adminPanelUrl();
+      const rows = [["Student", booking.student.name], ["Email", booking.student.email], ["Phone", booking.student.phone], ["Date & time", `${slot} (IST)`], ["Preparing for", booking.targetRole], ["Message", booking.notes || "—"], ["Amount paid", amount], ["Reference", booking.reference], ["Payment ID", booking.paymentId], ["Google Meet", meet || "Not set – add it in Admin › Career Guidance"]];
+      statuses.admin = await mailer.sendMail({
+        from: `"ProJenius" <${sender}>`, to: adminRecipient, replyTo: booking.student.email,
+        subject: `New guidance call: ${booking.student.name} – ${slot} (${amount})`,
+        text: ["A student has booked and paid for a 1:1 career guidance call.", "", ...rows.map(([k, v]) => `${k}: ${v}`), "", `Admin login: ${panel}`].join("\n"),
+        html: paymentEmailHtml({
+          eyebrow: "PROJENIUS ADMIN · CAREER GUIDANCE",
+          title: `${booking.student.name} booked a guidance call`,
+          intro: ["A student has booked and paid. The booking details PDF and the payment receipt are attached."],
+          rows, receiptAttached: Boolean(receiptPdf),
+          button: { label: "Open admin panel", href: panel },
+          footer: [meet ? `Google Meet: <a href="${escapeHtml(meet)}" style="color:#0478a8">${escapeHtml(meet)}</a>` : "Add the Google Meet link in Admin › Career Guidance.", "Reply to this email to write to the student directly."],
+        }),
+        attachments: [...(detailsPdf ? [{ filename: `ProJenius-Guidance-Booking-${booking.reference}.pdf`, content: detailsPdf, contentType: "application/pdf" }] : []), ...receiptAttachment],
+      }).then((r) => ({ status: "sent", messageId: r.messageId })).catch((error) => ({ status: "failed", error: getSafeError(error) }));
+    }
+  }
+  return statuses;
+}

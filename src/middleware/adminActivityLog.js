@@ -14,6 +14,7 @@ const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const SKIP = [/^\/api\/admin\/auth(\/|$)/, /^\/api\/admin\/admins(\/|$)/, /^\/api\/courses\/admin\/dashboard\//];
 
 const AREAS = [
+  [/^\/api\/guidance\/admin/, "Career guidance"],
   [/^\/api\/courses\/admin\/enrollments/, "Enrollments"],
   [/^\/api\/courses\/admin\/notifications/, "Course notifications"],
   [/^\/api\/courses\/admin\/(policy|common-faqs)/, "Course settings"],

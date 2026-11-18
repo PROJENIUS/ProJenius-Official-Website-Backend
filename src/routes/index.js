@@ -6,6 +6,7 @@ import courseRoutes from "../modules/courses/courses.routes.js";
 import publishingRoutes from "../modules/publishing/publishing.routes.js";
 import legalDocumentRoutes from "../modules/legal/legalDocuments.routes.js";
 import googleReviewsRoutes from "../modules/googleReviews/googleReviews.routes.js";
+import guidanceRoutes from "../modules/guidance/guidance.routes.js";
 
 /** Register the existing API groups without changing their public paths. */
 export function registerApiRoutes(app) {
@@ -14,6 +15,7 @@ export function registerApiRoutes(app) {
   app.use("/api/contact/enquiries", enquiryRoutes);
   app.use("/api/admin", adminContactRoutes);
   app.use("/api/courses", courseRoutes);
+  app.use("/api/guidance", guidanceRoutes);
   app.use("/api/legal", legalDocumentRoutes);
   app.use("/api/reviews", googleReviewsRoutes);
   app.use("/api", publishingRoutes);

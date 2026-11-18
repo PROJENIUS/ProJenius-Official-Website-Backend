@@ -39,6 +39,10 @@ export const PERMISSIONS = Object.freeze([
   "newsletter:campaigns:view",
   "newsletter:campaigns:retry",
   "newsletter:campaigns:cancel",
+  "guidance:view",
+  "guidance:manage",
+  "guidance:settings",
+  "guidance:refund",
   "legal:documents:view",
   "legal:documents:edit",
 ]);

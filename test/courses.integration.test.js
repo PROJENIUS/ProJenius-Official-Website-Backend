@@ -109,7 +109,7 @@ after(async () => {
 
 test("public catalogue, permission boundaries, checkout verification and durable publication use isolated data", async () => {
   const now = new Date();
-  const base = { title: "Synthetic Course", slug: "synthetic-course", shortDescription: "Test description", description: "Synthetic only.", category: "Testing", duration: "2 weeks", deliveryMode: "online", deliveryDetails: { onlinePlatform: "Synthetic Meet", onlineJoinUrl: "https://meet.example.invalid/synthetic", onlineAccessCode: "synthetic-code" }, priceMinor: 250000, currency: "INR", status: "published", publishedAt: now, createdBy: new mongoose.Types.ObjectId(), updatedBy: new mongoose.Types.ObjectId() };
+  const base = { title: "Synthetic Course", slug: "synthetic-course", shortDescription: "Test description", description: "Synthetic only.", category: "Testing", duration: "2 weeks", deliveryMode: "online", deliveryDetails: { onlinePlatform: "Synthetic Meet", onlineJoinUrl: "https://meet.example.invalid/synthetic", onlineAccessCode: "synthetic-code" }, badgeType: "trending", priceMinor: 250000, currency: "INR", status: "published", publishedAt: now, createdBy: new mongoose.Types.ObjectId(), updatedBy: new mongoose.Types.ObjectId() };
   const course = await Course.create(base);
   await Course.create({ ...base, title: "Hidden Draft", slug: "hidden-draft", status: "draft", publishedAt: null });
   let response = await fetch(endpoint);
@@ -117,6 +117,7 @@ test("public catalogue, permission boundaries, checkout verification and durable
   const catalogue = await response.json();
   assert.equal(catalogue.items.length, 1);
   assert.equal(catalogue.items[0].title, base.title);
+  assert.equal(catalogue.items[0].badgeLabel, "Trending", "public catalogue emits the saved badge label");
   assert.equal(catalogue.items[0].deliveryDetails, undefined, "private joining instructions are excluded from public course responses");
   const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
   const originalWarn = console.warn;
@@ -202,7 +203,7 @@ test("public catalogue, permission boundaries, checkout verification and durable
   assert.equal(enrolledRecord.receiptStatus, "ready");
   assert.equal(enrolledRecord.customerEmailStatus, "sent");
   assert.equal(enrolledRecord.adminEmailStatus, "sent");
-  assert.equal(enrolledRecord.approvalStatus, "awaiting_approval", "capture leaves registration awaiting a separate admin decision");
+  assert.equal(enrolledRecord.approvalStatus, undefined, "a verified payment is the confirmed enrolment; there is no approval step");
   assert.equal(notificationCalls.filter((x) => x.kind === "email").length, 2, "customer and admin jobs are independently stubbed after verified capture");
   let receiptResponse = await fetch(`${endpoint.replace("/api/courses", "")}${verifiedResponse.receiptUrl}`);
   assert.equal(receiptResponse.status, 200);
@@ -224,7 +225,7 @@ test("public catalogue, permission boundaries, checkout verification and durable
   assert.equal((await Payment.findOne({ orderId: orderData.order.id })).status, "captured");
   assert.equal((await Payment.findOne({ orderId: orderData.order.id })).gatewayFeeMinor, 5000);
 
-  const { decideCourseEnrollment, getCourseEnrollment } = await import("../src/modules/courses/courses.controller.js");
+  const { getCourseEnrollment } = await import("../src/modules/courses/courses.controller.js");
   const invoke = async (controller, req) => {
     let status = 200, body;
     await controller(req, { status(value) { status = value; return this; }, json(value) { body = value; return this; } }, (error) => { throw error; });
@@ -324,7 +325,7 @@ test("public catalogue, permission boundaries, checkout verification and durable
   const restoreScheduleRuntime = setCourseNotificationQueueRuntimeForTests({ async generateReceipt(details) { notificationCalls.push({ kind: "receipt", details }); return Buffer.from("synthetic PDF receipt"); }, async sendEmails(details, channels) { notificationCalls.push({ kind: "email", details, channels }); const result = {}; if (channels.customer) result.customer = { status: "sent" }; if (channels.admin) result.admin = { status: "sent" }; return result; }, async sendScheduleEmail(details) { scheduleDeliveries.push(details); return { status: "sent" }; }, async sendReceiptLink(details) { receiptLinks.push(details); return { status: "sent" }; } });
   const referencedBatch = scheduledCourse.batches[0].toObject();
   const sessionInput = referencedBatch.sessions.map((session) => ({ ...session, _id: String(session._id) }));
-  const approvedScheduleEnrollment = await Enrollment.create({ reference: `PJ-CRS-SCHEDULE-${randomUUID()}`, requestKey: randomUUID(), courseId: scheduledCourse._id, batchId: scheduledCourse.batches[0]._id, batchSnapshot: { code: "october-2026", label: "October cohort", deliveryMode: "online", startsAt: batchStart, timezone: "Asia/Kolkata" }, courseSnapshot: { title: scheduledCourse.title, slug: scheduledCourse.slug, amountMinor: scheduledCourse.priceMinor, currency: "INR" }, student: { name: "Synthetic Schedule Buyer", email: "schedule@example.invalid", phone: "+1 555 010 0124" }, terms: { version: "test-v1", acceptedAt: new Date(), policy: "Synthetic terms" }, status: "enrolled", approvalStatus: "approved", approvalAt: new Date() });
+  const approvedScheduleEnrollment = await Enrollment.create({ reference: `PJ-CRS-SCHEDULE-${randomUUID()}`, requestKey: randomUUID(), courseId: scheduledCourse._id, batchId: scheduledCourse.batches[0]._id, batchSnapshot: { code: "october-2026", label: "October cohort", deliveryMode: "online", startsAt: batchStart, timezone: "Asia/Kolkata" }, courseSnapshot: { title: scheduledCourse.title, slug: scheduledCourse.slug, amountMinor: scheduledCourse.priceMinor, currency: "INR" }, student: { name: "Synthetic Schedule Buyer", email: "schedule@example.invalid", phone: "+1 555 010 0124" }, terms: { version: "test-v1", acceptedAt: new Date(), policy: "Synthetic terms" }, status: "enrolled" });
   let scheduleUpdate = await invoke(updateCourse, { params: { id: String(scheduledCourse._id) }, admin: { id: new mongoose.Types.ObjectId().toString(), role: "admin", permissions: ["courses:schedule"] }, body: { batches: [{ ...referencedBatch, _id: String(referencedBatch._id), sessions: [] }] } });
   assert.equal(scheduleUpdate.status, 409, "a saved session cannot be removed after a registration references its batch");
   scheduleUpdate = await invoke(updateCourse, { params: { id: String(scheduledCourse._id) }, admin: { id: new mongoose.Types.ObjectId().toString(), role: "admin", permissions: ["courses:schedule"] }, body: { scheduleChangeReason: "Instructor availability changed.", batches: [{ ...referencedBatch, _id: String(referencedBatch._id), sessions: sessionInput.map((session) => ({ ...session, status: "cancelled" })) }] } });
@@ -356,20 +357,6 @@ test("public catalogue, permission boundaries, checkout verification and durable
   let decision = await invoke(getCourseEnrollment, { params: { id: String(enrolledRecord._id) }, admin: { role: "admin", permissions: [] } });
   assert.equal(decision.status, 200);
   assert.equal(decision.body.item.course.deliveryDetails, undefined, "private delivery details require course-view permission");
-  decision = await invoke(decideCourseEnrollment, { params: { id: String(enrolledRecord._id) }, body: { action: "approve" }, admin: { id: actorId } });
-  assert.equal(decision.status, 200);
-  assert.equal(decision.body.item.approvalStatus, "approved");
-  assert.equal(decision.body.item.approvalEmailStatus, "sent");
-  const approvedRecord = await Enrollment.findById(enrolledRecord._id).lean();
-  assert.equal(approvedRecord.status, "enrolled", "approval remains separate from captured-payment state");
-  assert.equal(approvedRecord.approvalHistory[0].actorAdminId.toString(), actorId);
-  assert.equal(decisionEmails[0].to, "buyer@example.invalid");
-  assert.match(decisionEmails[0].text, /contact you by phone/i);
-  assert.doesNotMatch(decisionEmails[0].text, /meet\.example\.invalid|synthetic-code|venue|access code/i);
-
-  deniedStatus = 200;
-  requirePermission("courses:enrollments:approve")({ admin: { role: "admin", permissions: [] } }, { status(value) { deniedStatus = value; return this; }, json() {} }, () => assert.fail("an admin without approval permission must be denied"));
-  assert.equal(deniedStatus, 403);
 
   const webhookBody = Buffer.from(JSON.stringify({ event: "payment.captured", payload: { payment: { entity: { id: paymentId, order_id: orderData.order.id, amount: base.priceMinor, currency: "INR", status: "captured" } } } }));
   const webhookSignature = createHmac("sha256", "synthetic-webhook-secret").update(webhookBody).digest("hex");
@@ -428,17 +415,6 @@ test("public catalogue, permission boundaries, checkout verification and durable
   assert.equal(retryRecord.status, "captured");
   assert.equal(retryRecord.attempts[0].status, "authorized", "earlier provider payment attempts remain recorded");
   assert.equal((await Enrollment.findOne({ reference: pendingOrder.enrollment.reference })).status, "enrolled");
-  const pendingApprovalRecord = await Enrollment.findOne({ reference: pendingOrder.enrollment.reference });
-  decision = await invoke(decideCourseEnrollment, { params: { id: String(pendingApprovalRecord._id) }, body: { action: "approve" }, admin: { id: actorId } });
-  assert.equal(decision.status, 200, "registration approval does not depend on seat counters");
-  assert.equal((await Enrollment.findById(pendingApprovalRecord._id)).approvalStatus, "approved");
-  const rejectionEnrollment = await Enrollment.create({ reference: `PJ-CRS-TEST-${randomUUID()}`, requestKey: randomUUID(), courseId: course._id, courseSnapshot: { title: base.title, slug: base.slug, amountMinor: base.priceMinor, currency: "INR" }, student: { name: "Synthetic Reject", email: "reject@example.invalid", phone: "+1 555 010 0199" }, terms: { version: "live-training-v2", acceptedAt: now, policy: "synthetic terms" }, status: "enrolled" });
-  const rejectionOrderId = `order_reject_${randomUUID()}`;
-  await Payment.create({ enrollmentId: rejectionEnrollment._id, courseId: course._id, orderId: rejectionOrderId, paymentId: `pay_reject_${randomUUID()}`, amountMinor: base.priceMinor, currency: "INR", status: "captured", capturedAt: now });
-  decision = await invoke(decideCourseEnrollment, { params: { id: String(rejectionEnrollment._id) }, body: { action: "reject", reason: "Synthetic policy review." }, admin: { id: actorId } });
-  assert.equal(decision.status, 200);
-  assert.equal(decision.body.item.approvalStatus, "rejected");
-  assert.equal((await Payment.findOne({ orderId: rejectionOrderId })).status, "captured", "rejection does not fabricate a refund or erase captured payment");
 
   const notificationsBeforeFailedPayment = notificationCalls.filter((x) => x.kind === "email").length;
   response = await fetch(`${endpoint}/${course.id}/orders`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": "synthetic-failed-payment-001" }, body: JSON.stringify({ student: { name: "Failed Buyer", email: "failed@example.invalid", phone: "+1 555 010 0125" }, termsAccepted: true, termsVersion: "live-training-v2" }) });
@@ -537,12 +513,13 @@ test("course payload validation accepts structured course content and rejects un
   assert.equal(payload.projects[0].title, "Capstone");
   assert.equal(payload.certificate.available, true);
   assert.throws(() => validateCourseInput({ curriculum: [{ title: "Unsafe", lessons: [{ title: "Lesson", resourceUrl: "http://example.invalid" }] }] }, { partial: true }), CourseValidationError);
-  assert.throws(() => validateCourseInput({ listPriceMinor: 120000, priceMinor: 120000 }, { partial: true }), CourseValidationError);
+  assert.equal(validateCourseInput({ listPriceMinor: 120000, priceMinor: 120000 }, { partial: true }).listPriceMinor, 120000);
+  assert.throws(() => validateCourseInput({ premiumEligible: "yes" }, { partial: true }), CourseValidationError);
 });
 
 test("notification worker recovers an abandoned lease and stops at its retry limit", async () => {
   const course = await Course.create({ title: "Queue test course", slug: `queue-test-${randomUUID()}`, shortDescription: "Synthetic", description: "Synthetic", category: "Test", duration: "1 day", deliveryMode: "online", priceMinor: 10000, currency: "INR", status: "published", publishedAt: new Date(), createdBy: new mongoose.Types.ObjectId(), updatedBy: new mongoose.Types.ObjectId() });
-  const enrollment = await Enrollment.create({ reference: `PJ-CRS-QUEUE-${randomUUID()}`, requestKey: randomUUID(), courseId: course._id, courseSnapshot: { title: course.title, slug: course.slug, amountMinor: 10000, currency: "INR" }, student: { name: "Synthetic Queue Buyer", email: "queue@example.invalid", phone: "+1 555 010 0190" }, terms: { version: "test-v1", acceptedAt: new Date(), policy: "Synthetic terms" }, status: "enrolled", approvalStatus: "awaiting_approval" });
+  const enrollment = await Enrollment.create({ reference: `PJ-CRS-QUEUE-${randomUUID()}`, requestKey: randomUUID(), courseId: course._id, courseSnapshot: { title: course.title, slug: course.slug, amountMinor: 10000, currency: "INR" }, student: { name: "Synthetic Queue Buyer", email: "queue@example.invalid", phone: "+1 555 010 0190" }, terms: { version: "test-v1", acceptedAt: new Date(), policy: "Synthetic terms" }, status: "enrolled" });
   await Payment.create({ enrollmentId: enrollment._id, courseId: course._id, orderId: `order_${randomUUID()}`, paymentId: `pay_${randomUUID()}`, amountMinor: 10000, currency: "INR", status: "captured", capturedAt: new Date() });
   const abandoned = await NotificationJob.create({ dedupeKey: `abandoned-${randomUUID()}`, enrollmentId: enrollment._id, courseId: course._id, type: "receipt_link", recipient: enrollment.student.email, status: "processing", attempts: 1, maxAttempts: 3, leaseUntil: new Date(Date.now() - 1000) });
   const { processCourseNotificationWorkerOnce } = await import("../src/modules/courses/courseNotificationQueue.service.js");
@@ -586,6 +563,45 @@ test("notification worker recovers an abandoned lease and stops at its retry lim
   assert.equal((await NotificationJob.findOne({ enrollmentId: receiptFailureEnrollment._id, type: "payment_admin" })).status, "sent");
 });
 
+test("publication validation enforces the finalized content baseline without rejecting an explicit no-prerequisites choice", async () => {
+  const { validateCourseInput, validateCourseForPublishing, validateStudentInput, CourseValidationError } = await import("../src/modules/courses/courses.validation.js");
+  const payload = validateCourseInput({
+    title: "Synthetic training", slug: "synthetic-training", shortDescription: "Practical learning for synthetic data", description: "No real customer information.", category: "Testing", duration: "4 weeks", deliveryMode: "online", priceMinor: 149900, listPriceMinor: 149900, premiumEligible: false,
+    aboutContent: "<p onclick=\"x()\">Build a project</p><script>bad()</script>", badgeType: "trending", badges: ["Trending"], sessionLength: "90 minutes", sessionCount: 8, courseValidity: "12 months",
+    prerequisitesDeclared: true, noPrerequisites: true, experienceLevel: "beginner-friendly", learningOutcomes: ["Build an application"],
+    curriculum: [{ title: "Foundations", topics: [{ title: "Data basics" }], practicalActivities: [{ title: "Create a chart" }] }],
+  });
+  assert.equal(payload.aboutContent, "<p>Build a project</p>");
+  assert.equal(validateCourseForPublishing({ ...payload, coverImage: { mediaId: "507f1f77bcf86cd799439011" } }), true);
+  assert.throws(() => validateCourseForPublishing({ ...payload, deliveryMode: "hybrid", coverImage: { filename: "course.jpg" } }), CourseValidationError);
+  assert.deepEqual(validateStudentInput({ name: "Synthetic Buyer", email: "buyer@example.invalid", phone: "+1 555 010 0100" }).preferredDays, []);
+  assert.deepEqual(validateStudentInput({ name: "Synthetic Buyer", email: "buyer@example.invalid", phone: "+1 555 010 0100", preferredDays: ["Monday", "Monday"], preferredTimeSlots: ["Evening"] }).preferredDays, ["Monday"]);
+  assert.throws(() => validateStudentInput({ name: "Synthetic Buyer", email: "buyer@example.invalid", phone: "+1 555 010 0100", preferredDays: ["Funday"] }), CourseValidationError);
+});
+
+test("public detail returns persisted structured content, published reviews, related courses and merged FAQs", async () => {
+  const CourseCommonFaq = (await import("../src/modules/courses/courseCommonFaq.model.js")).default;
+  const shared = { shortDescription: "Synthetic course content", description: "Synthetic details.", category: "Synthetic QA", duration: "4 weeks", deliveryMode: "online", priceMinor: 10000, currency: "INR", status: "published", publishedAt: new Date(), createdBy: new mongoose.Types.ObjectId(), updatedBy: new mongoose.Types.ObjectId() };
+  const related = await Course.create({ ...shared, title: "Related synthetic course", slug: `related-${randomUUID()}` });
+  const current = await Course.create({ ...shared, title: "Structured synthetic course", slug: `structured-${randomUUID()}`, premiumEligible: true, aboutContent: "<p>Saved summary</p>", highlights: ["Practice"], curriculum: [{ title: "First module", topics: [{ title: "Topic one" }], practicalActivities: [{ title: "Activity one" }] }], learningOutcomes: ["Build a project"], experienceLevel: "beginner-friendly", prerequisitesDeclared: true, noPrerequisites: true, sessionLength: "90 minutes", sessionCount: 8, courseValidity: "12 months", relatedCourseIds: [related._id], reviews: [{ studentName: "Synthetic Reviewer", rating: 5, testimonial: "Useful course", reviewDate: new Date("2026-10-01"), published: true, order: 0 }, { studentName: "Hidden Reviewer", rating: 1, testimonial: "Draft review", reviewDate: new Date(), published: false, order: 1 }], faqs: [{ question: "Shared question?", answer: "Course answer", published: true, order: 0 }] });
+  const actor = new mongoose.Types.ObjectId();
+  await CourseCommonFaq.create({ question: "Shared question?", answer: "Common answer", published: true, order: 0, createdBy: actor, updatedBy: actor });
+  await CourseCommonFaq.create({ question: "Common question?", answer: "Common answer", published: true, order: 1, createdBy: actor, updatedBy: actor });
+  const response = await fetch(`${endpoint}/slug/${current.slug}`);
+  assert.equal(response.status, 200);
+  const { item } = await response.json();
+  assert.equal(item.aboutContent, "<p>Saved summary</p>");
+  assert.equal(item.premiumEligible, true);
+  assert.equal(item.curriculum[0].topics[0].title, "Topic one");
+  assert.equal(item.curriculum[0].practicalActivities[0].title, "Activity one");
+  assert.equal(item.reviews.length, 1);
+  assert.equal(item.rating, 5);
+  assert.equal(item.reviewCount, 1);
+  assert.equal(item.relatedCourses[0]._id, String(related._id));
+  assert.equal(item.faqs.length, 2);
+  assert.equal(item.faqs[0].answer, "Common answer", "the shared question is deduplicated in favor of the common FAQ");
+});
+
 test("course images require an allowed extension, MIME type and matching file signature", async () => {
   const { detectCourseImageType } = await import("../src/modules/courses/courses.controller.js");
   const png = Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0x00,0x00,0x00,0x00]);
@@ -624,4 +640,12 @@ test("verified course receipt generator creates a PDF for synthetic captured det
   const pdf = await generateCourseReceipt({ reference: "PJ-CRS-20261014-ABCDEF1234567890", student: { name: "Synthetic Student", email: "student@example.invalid" }, courseTitle: "Synthetic Course", amountMinor: 125000, paymentId: "pay_synthetic_pdf", paidAt: new Date("2026-10-14T10:00:00Z") });
   assert.equal(Buffer.isBuffer(pdf), true);
   assert.equal(pdf.subarray(0, 4).toString("ascii"), "%PDF");
+});
+
+test("Premium eligibility metadata persists independently of payment/access state", async () => {
+  const created = await Course.create({ title: "Premium metadata verification", slug: `premium-metadata-${randomUUID()}`, shortDescription: "Synthetic metadata", description: "Synthetic data only", category: "Testing", duration: "One week", deliveryMode: "online", priceMinor: 10000, listPriceMinor: 12000, premiumEligible: true, status: "draft", createdBy: new mongoose.Types.ObjectId(), updatedBy: new mongoose.Types.ObjectId() });
+  const saved = await Course.findById(created._id).lean();
+  assert.equal(saved.premiumEligible, true);
+  assert.equal(saved.listPriceMinor, 12000);
+  assert.equal(saved.priceMinor, 10000);
 });

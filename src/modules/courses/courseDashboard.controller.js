@@ -12,6 +12,7 @@ import CourseRefund from "./courseRefund.model.js";
 import Enquiry from "../contacts/enquiry.model.js";
 import JobApplication from "../careers/jobApplication.model.js";
 import Admin from "../admin/auth/admin.model.js";
+import { GuidanceBooking } from "../guidance/guidance.models.js";
 
 const PAID = ["captured", "partially_refunded", "refunded"];
 const TZ = "Asia/Kolkata";
@@ -100,7 +101,8 @@ export async function adminDashboard(req, res, next) {
     const me = await Admin.findById(req.admin.id).select("notificationsClearedAt").lean();
     const clearedAt = me?.notificationsClearedAt || new Date(0);
     const unseen = { createdAt: { $gt: clearedAt }, $or: [{ isRead: false }, { status: "new" }] };
-    const [enqMonthly, enqTypes, enqStatus, enqWeek, newEnquiries, jobStatus, newJobs, orderStatus, failedEmails] = await Promise.all([
+    const canGuidance = can("guidance:view");
+    const [enqMonthly, enqTypes, enqStatus, enqWeek, newEnquiries, jobStatus, newJobs, orderStatus, failedEmails, guidanceMonthly, guidanceStatus, newGuidance] = await Promise.all([
       canEnquiries ? Enquiry.aggregate([{ $match: { createdAt: { $gte: since } } }, { $group: { _id: monthKey("$createdAt"), count: { $sum: 1 } } }]) : [],
       canEnquiries ? Enquiry.aggregate([{ $match: { createdAt: { $gte: since } } }, { $group: { _id: "$enquiryType", count: { $sum: 1 } } }]) : [],
       canEnquiries ? Enquiry.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]) : [],
@@ -110,7 +112,17 @@ export async function adminDashboard(req, res, next) {
       canCareers ? JobApplication.find(unseen).select("referenceNumber answers.name answers.fullName answers.role answers.position createdAt").sort({ createdAt: -1 }).limit(4).lean() : [],
       CoursePayment.aggregate([{ $match: { createdAt: { $gte: since } } }, { $group: { _id: "$status", count: { $sum: 1 } } }]),
       canEnquiries ? Enquiry.find({ createdAt: { $gt: clearedAt }, $or: [{ emailStatus: "failed" }, { customerEmailStatus: "failed" }, { adminEmailStatus: "failed" }] }).select("referenceNumber enquiryType answers.name answers.fullName createdAt").sort({ createdAt: -1 }).limit(4).lean() : [],
+      GuidanceBooking.aggregate([{ $match: { paidAt: { $gte: since } } }, { $group: { _id: monthKey("$paidAt"), amountMinor: { $sum: "$amountMinor" }, count: { $sum: 1 } } }]),
+      canGuidance ? GuidanceBooking.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]) : [],
+      canGuidance ? GuidanceBooking.find({ status: "confirmed", paidAt: { $gt: clearedAt } }).select("reference student.name slotStart paidAt").sort({ paidAt: -1 }).limit(4).lean() : [],
     ]);
+    // Career guidance payments count towards money received.
+    const gm = byMonth(guidanceMonthly);
+    monthly.forEach((row) => {
+      if (canSeeMoney) row.receivedMinor += gm[row.month]?.amountMinor || 0;
+      row.guidanceCalls = gm[row.month]?.count || 0;
+    });
+    const gs = Object.fromEntries(guidanceStatus.map((row) => [row._id, row.count]));
     const em = byMonth(enqMonthly);
     monthly.forEach((row) => { if (canEnquiries) row.enquiries = em[row.month]?.count || 0; });
     const es = Object.fromEntries(enqStatus.map((row) => [row._id, row.count]));
@@ -120,6 +132,7 @@ export async function adminDashboard(req, res, next) {
     const notifications = [
       ...newEnquiries.map((item) => ({ kind: "enquiry", title: `New ${item.enquiryType} enquiry`, who: who(item), reference: item.referenceNumber, at: item.createdAt })),
       ...failedEmails.map((item) => ({ kind: "email", title: `Email failed: ${item.enquiryType} enquiry`, who: who(item), reference: item.referenceNumber, at: item.createdAt })),
+      ...newGuidance.map((item) => ({ kind: "guidance", title: "New career guidance call booked", who: item.student?.name || "Student", reference: item.reference, at: item.paidAt })),
       ...newJobs.map((item) => ({ kind: "career", title: "New career application", who: who(item), reference: item.referenceNumber, at: item.createdAt })),
       ...recentEnrolments.filter((item) => item.status === "enrolled" && new Date(item.paidAt) > clearedAt).slice(0, 4).map((item) => ({ kind: "enrolment", title: "New paid enrolment", who: item.student?.name || "Student", reference: item.reference, at: item.paidAt })),
     ].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 8);
@@ -130,7 +143,7 @@ export async function adminDashboard(req, res, next) {
       monthly,
       totals: {
         ...(canSeeMoney ? {
-          receivedMinor: received.reduce((n, row) => n + row.amountMinor, 0),
+          receivedMinor: monthly.reduce((n, row) => n + (row.receivedMinor || 0), 0),
           refundedMinor: refundMap.processed?.amountMinor || 0,
         } : {}),
         refundsProcessed: refundMap.processed?.count || 0,
@@ -153,6 +166,7 @@ export async function adminDashboard(req, res, next) {
         byType: enqTypes.map((row) => ({ type: row._id, count: row.count })).sort((a, b) => b.count - a.count),
       } : null,
       careers: canCareers ? { total: Object.values(js).reduce((n, v) => n + v, 0), new: js.new || 0, shortlisted: js.shortlisted || 0 } : null,
+      guidance: canGuidance ? { upcoming: gs.confirmed || 0, completed: gs.completed || 0, refunded: gs.refunded || 0, cancelled: gs.cancelled || 0 } : null,
       orders: { paid: (os.captured || 0) + (os.partially_refunded || 0) + (os.refunded || 0), failed: (os.failed || 0) + (os.cancelled || 0), pending: (os.created || 0) + (os.pending || 0) + (os.authorized || 0) },
       notifications,
     } });

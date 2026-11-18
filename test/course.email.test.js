@@ -42,9 +42,14 @@ test("course email outcomes are separate and PDF is attached while delivery is s
     assert.deepEqual(messages.map(({ to }) => to), [details.student.email, "admin@example.invalid"]);
     assert.equal(messages[0].attachments[0].content.toString(), "synthetic PDF bytes");
     assert.equal(messages[1].attachments[0].content.toString(), "synthetic PDF bytes");
-    assert.match(messages[0].text, /contact you by phone/i);
-    assert.match(messages[1].text, /contact the student by phone/i);
+    assert.match(messages[0].text, /our team will call you/i);
+    assert.match(messages[1].text, /call the student/i);
     assert.doesNotMatch(messages[0].text, /joining link|access code|venue/i);
+    assert.match(messages[0].subject, /Thank you for enrolling in Synthetic Course/);
+    assert.match(messages[0].html, /Synthetic Course/);
+    assert.match(messages[1].subject, /New enrolment: Synthetic Student/);
+    assert.match(messages[1].html, /pro-jenius-admin-website-frontend\.vercel\.app/);
+    assert.match(messages[1].text, /Admin login: https:\/\//);
   } finally {
     restore();
   }
