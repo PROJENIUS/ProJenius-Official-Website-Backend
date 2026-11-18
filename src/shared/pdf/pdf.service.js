@@ -2,10 +2,11 @@ import PDFDocument from "pdfkit";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { getPublicSiteOrigin } from "../../config/siteOrigins.js";
 
 const COMPANY = {
   name: "ProJenius Innovation Technology Private Limited",
-  website: "projenius.in",
+  website: getPublicSiteOrigin(),
   phone: "8925450473",
   address: "Plot No. 3, Velmurugan Nagar, Erikarai Street, Madurai - 625016",
 };

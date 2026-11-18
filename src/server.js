@@ -21,7 +21,6 @@ function validateEnvironment() {
   const requiredVariables = [
     "MONGODB_URI",
     "SESSION_SECRET",
-    "ADMIN_SITE_ORIGIN",
   ];
 
   for (const name of requiredVariables) {

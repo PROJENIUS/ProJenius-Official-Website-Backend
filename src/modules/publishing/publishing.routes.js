@@ -5,7 +5,7 @@ import multer from "multer";
 import { authenticateAdmin } from "../../middleware/authenticateAdmin.js";
 import { csrfProtection } from "../../middleware/csrfProtection.js";
 import { requireAnyPermission, requirePermission, requireSuperAdmin } from "../admin/management/permissions.js";
-import { subscribe, confirm, unsubscribe, publicList, publicUnifiedList, publicCategories, publicDetail, uploadImage, publicAsset, publicMedia, adminAsset, adminList, adminGet, createArticle, updateArticle, publishNow, changeArticleState, announceAgain, adminStats, adminSubscribers, adminRemoveSubscriber, adminCampaigns, adminDeliveries, retryCampaign, cancelCampaign } from "./publishing.controller.js";
+import { subscribe, confirm, unsubscribe, publicList, publicUnifiedList, publicCategories, publicDetail, uploadImage, publicAsset, publicMedia, adminAsset, adminList, adminGet, createArticle, updateArticle, publishNow, changeArticleState, announceAgain, adminStats, adminSubscribers, adminRemoveSubscriber, adminRetryWelcomeEmail, adminCampaigns, adminDeliveries, retryCampaign, cancelCampaign } from "./publishing.controller.js";
 
 const router = Router();
 const limiter = (limit) => rateLimit({ windowMs: 15 * 60 * 1000, limit, standardHeaders: "draft-8", legacyHeaders: false, message: { error: "Too many requests. Please try again later." } });
@@ -37,6 +37,7 @@ router.post("/admin/articles/:id/announce", csrfProtection, requirePermission("p
 router.post("/admin/articles/image", csrfProtection, requirePermission("publishing:articles:uploadImage"), upload, uploadImage);
 router.get("/admin/newsletter/stats", requirePermission("newsletter:subscribers:view"), adminStats);
 router.get("/admin/newsletter/subscribers", requirePermission("newsletter:subscribers:view"), adminSubscribers);
+router.post("/admin/newsletter/subscribers/:id/welcome-email/retry", csrfProtection, requirePermission("newsletter:subscribers:retry"), adminRetryWelcomeEmail);
 router.delete("/admin/newsletter/subscribers/:id", csrfProtection, requireSuperAdmin, adminRemoveSubscriber);
 router.get("/admin/newsletter/campaigns", requirePermission("newsletter:campaigns:view"), adminCampaigns);
 router.get("/admin/newsletter/campaigns/:id/deliveries", requirePermission("newsletter:campaigns:view"), adminDeliveries);

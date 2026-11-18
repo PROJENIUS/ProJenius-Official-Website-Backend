@@ -19,6 +19,8 @@ import {
   downloadEnquiryReceipt,
   downloadJobApplicationReceipt,
   getDashboardStats,
+  retryEnquiryEmails,
+  retryJobApplicationEmails,
 } from "./adminContact.controller.js";
 
 import { authenticateAdmin } from "../../middleware/authenticateAdmin.js";
@@ -42,6 +44,7 @@ router.get(
   downloadEnquiryAttachment
 );
 
+router.post("/enquiries/:id/emails/retry", requirePermission("enquiries:changeStatus"), csrfProtection, retryEnquiryEmails);
 router.get("/enquiries/:id", requirePermission("enquiries:details"), getEnquiry);
 
 router.patch(
@@ -61,6 +64,7 @@ router.get(
   downloadJobApplicationResume
 );
 
+router.post("/job-applications/:id/emails/retry", requirePermission("careerApplications:changeStatus"), csrfProtection, retryJobApplicationEmails);
 router.get("/job-applications/:id", requirePermission("careerApplications:details"), getJobApplication);
 
 router.patch(

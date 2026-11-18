@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import CourseReceipt from "./courseReceipt.model.js";
+import { getPublicSiteOrigin } from "../../config/siteOrigins.js";
 
 const PRIVATE_UPLOAD_ROOT = path.resolve(process.env.PRIVATE_UPLOAD_DIR || "./private_uploads");
 const RECEIPT_ROOT = path.resolve(process.env.COURSE_RECEIPT_STORAGE_DIR || path.join(PRIVATE_UPLOAD_ROOT, "course_receipts"));
@@ -20,7 +21,7 @@ async function readReceipt(filename) {
 const company = {
   name: "ProJenius Innovation Technology Private Limited",
   address: "Plot No. 3, Velmurugan Nagar, Erikarai Street, Madurai - 625016",
-  website: "projenius.in",
+  website: getPublicSiteOrigin(),
   phone: "8925450473",
 };
 

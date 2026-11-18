@@ -33,7 +33,7 @@ const adminSchema = new mongoose.Schema(
 
     role: {
       type: String,
-      enum: ["superadmin", "admin"],
+      enum: ["superadmin", "admin", "staff"],
       default: "admin",
       required: true,
     },
@@ -42,6 +42,11 @@ const adminSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
       required: true,
+    },
+
+    notificationsClearedAt: {
+      type: Date,
+      default: null,
     },
 
     lastLoginAt: {

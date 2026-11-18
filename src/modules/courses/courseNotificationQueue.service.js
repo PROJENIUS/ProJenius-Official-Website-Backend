@@ -3,8 +3,9 @@ import Course from "./course.model.js";
 import CourseEnrollment from "./courseEnrollment.model.js";
 import CoursePayment from "./coursePayment.model.js";
 import CourseNotificationJob from "./courseNotificationJob.model.js";
+import { getPublicSiteOrigin } from "../../config/siteOrigins.js";
 import { getOrCreateCourseReceipt } from "./courseReceipt.service.js";
-import { sendCourseDecisionEmail, sendCourseNotificationEmails, sendCourseReceiptLinkEmail, sendCourseScheduleEmail } from "../../shared/email/email.service.js";
+import { sendCourseNotificationEmails, sendCourseReceiptLinkEmail, sendCourseScheduleEmail } from "../../shared/email/email.service.js";
 
 const intSetting = (name, fallback, min, max) => {
   const parsed = Number.parseInt(process.env[name] || "", 10);
@@ -44,12 +45,8 @@ export async function enqueuePaymentNotifications(enrollment, course, payment) {
   return jobs;
 }
 
-export async function enqueueDecisionNotification(enrollment, course, decision) {
-  return enqueueCourseNotification({ enrollment, course, type: decision, dedupeKey: `${enrollment._id}:${decision}:${enrollment.approvalAt?.getTime() || Date.now()}` });
-}
-
 export async function enqueueScheduleNotifications(course, type, change, batchIds = []) {
-  const filter = { courseId: course._id, status: "enrolled", approvalStatus: "approved" };
+  const filter = { courseId: course._id, status: "enrolled" };
   if (batchIds.length) filter.batchId = { $in: batchIds };
   const enrollments = await CourseEnrollment.find(filter).lean();
   return Promise.all(enrollments.map((enrollment) => enqueueCourseNotification({
@@ -89,10 +86,7 @@ async function deliver(job) {
   if (job.type === "receipt_link") {
     const payment = await CoursePayment.findOne({ enrollmentId: enrollment._id, status: { $in: ["captured", "partially_refunded", "refunded"] } }).sort({ capturedAt: -1 }).lean();
     if (!payment) return { status: "failed", error: "Verified payment record is unavailable." };
-    const originValue = process.env.PUBLIC_SITE_ORIGIN?.trim();
-    let origin;
-    try { origin = new URL(originValue); } catch { return { status: "not_configured" }; }
-    if (!["https:", "http:"].includes(origin.protocol) || (origin.protocol === "http:" && !["localhost", "127.0.0.1"].includes(origin.hostname))) return { status: "not_configured" };
+    const origin = new URL(getPublicSiteOrigin());
     const details = { reference: enrollment.reference, student: enrollment.student, courseTitle: enrollment.courseSnapshot.title, amountMinor: payment.amountMinor, paymentId: payment.paymentId, paidAt: payment.capturedAt || enrollment.paidAt };
     const receipt = await getOrCreateCourseReceipt({ enrollment, payment, details, generate: testRuntime?.generateReceipt });
     const token = crypto.randomBytes(32).toString("base64url");
@@ -100,12 +94,6 @@ async function deliver(job) {
     await CourseEnrollment.updateOne({ _id: enrollment._id, status: "enrolled" }, { $set: { receiptTokenHash: crypto.createHash("sha256").update(token).digest("hex"), receiptTokenExpiresAt: expiresAt, receiptStatus: "ready" } });
     const url = `${origin.origin}/services/courses/receipt/${token}`;
     return testRuntime?.sendReceiptLink ? testRuntime.sendReceiptLink({ enrollment, course, payment, pdfBuffer: receipt.buffer, url }) : sendCourseReceiptLinkEmail({ enrollment, course, payment, pdfBuffer: receipt.buffer, url });
-  }
-
-  if (job.type === "approved" || job.type === "rejected") {
-    const result = testRuntime?.sendDecisionEmail ? await testRuntime.sendDecisionEmail({ enrollment, course, decision: job.type, reason: enrollment.approvalReason }) : await sendCourseDecisionEmail({ enrollment, course, decision: job.type, reason: enrollment.approvalReason });
-    await CourseEnrollment.updateOne({ _id: enrollment._id, approvalStatus: job.type }, { $set: { approvalEmailStatus: result.status } });
-    return result;
   }
 
   const result = testRuntime?.sendScheduleEmail ? await testRuntime.sendScheduleEmail({ enrollment, course, cancelled: job.type === "cancelled", change: job.context?.change || {} }) : await sendCourseScheduleEmail({ enrollment, course, cancelled: job.type === "cancelled", change: job.context?.change || {} });
@@ -166,7 +154,7 @@ export async function listCourseNotificationJobs({ page = 1, limit = 20, status 
     filter.status = status;
   }
   const [items, total] = await Promise.all([
-    CourseNotificationJob.find(filter).select("-context").populate("enrollmentId", "reference student.name courseSnapshot.title approvalStatus").sort({ createdAt: -1 }).skip((safePage - 1) * safeLimit).limit(safeLimit).lean(),
+    CourseNotificationJob.find(filter).select("-context").populate("enrollmentId", "reference student.name courseSnapshot.title").sort({ createdAt: -1 }).skip((safePage - 1) * safeLimit).limit(safeLimit).lean(),
     CourseNotificationJob.countDocuments(filter),
   ]);
   return { items, pagination: { page: safePage, limit: safeLimit, total, pages: Math.ceil(total / safeLimit) } };

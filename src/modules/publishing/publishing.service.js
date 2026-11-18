@@ -6,6 +6,7 @@ import ContentArticle from "./contentArticle.model.js";
 import NewsletterSubscriber from "./newsletterSubscriber.model.js";
 import NewsletterCampaign from "./newsletterCampaign.model.js";
 import NewsletterDelivery from "./newsletterDelivery.model.js";
+import { getPublicApiOrigin, getPublicSiteOrigin } from "../../config/siteOrigins.js";
 import { PUBLISHING_UPLOAD_ROOT, LEGACY_PUBLISHING_UPLOAD_ROOT } from "./publishing.storage.js";
 import PublicationEvent from "./publicationEvent.model.js";
 import { sendNewsletterAnnouncementEmail, sendNewsletterWelcomeEmail } from "../../shared/email/email.service.js";
@@ -14,8 +15,8 @@ import { findStoredImage } from "../../shared/media/gridfsMedia.service.js";
 
 const tokenHash = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const plain = (value) => String(value || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-const origin = () => { try { const url = new URL(process.env.PUBLIC_SITE_ORIGIN || ""); if (!["https:", "http:"].includes(url.protocol) || (url.protocol === "http:" && !["localhost", "127.0.0.1"].includes(url.hostname))) return null; return url.origin; } catch { return null; } };
-const apiOrigin = () => { try { const url = new URL(process.env.PUBLIC_API_ORIGIN || process.env.PUBLIC_SITE_ORIGIN || ""); if (!["https:", "http:"].includes(url.protocol) || (url.protocol === "http:" && !["localhost", "127.0.0.1"].includes(url.hostname))) return null; return url.origin; } catch { return null; } };
+const origin = () => getPublicSiteOrigin();
+const apiOrigin = () => getPublicApiOrigin();
 const newsUrl = (type, slug) => `${origin()}/news-insights/${type === "blog" ? "blog" : "news"}/${encodeURIComponent(slug)}`;
 const id = (v) => String(v?._id || v);
 const backoff = (attempt) => Math.min(6 * 60 * 60 * 1000, 30_000 * (2 ** Math.max(0, attempt - 1)));
@@ -39,14 +40,7 @@ async function campaignImageReference(type, source) {
 }
 
 async function campaignImageUrl(campaign) {
-  const configured = process.env.PUBLIC_API_ORIGIN?.trim();
-  if (!configured) return "";
-  let originUrl;
-  try {
-    originUrl = new URL(configured);
-    const localTestOrigin = process.env.NODE_ENV !== "production" && originUrl.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(originUrl.hostname.toLowerCase());
-    if (originUrl.username || originUrl.password || originUrl.search || originUrl.hash || (originUrl.protocol !== "https:" && !localTestOrigin)) return "";
-  } catch { return ""; }
+  const originUrl = new URL(getPublicApiOrigin());
   if (campaign.imageMediaId) {
     const file = await findStoredImage(campaign.imageMediaId);
     return file ? `${originUrl.origin}/api/media/${campaign.imageMediaId}` : "";
@@ -190,6 +184,41 @@ async function processNewsletterWelcomeEmails(now = new Date(), onlyId) {
   }
 }
 
+// Admin-triggered retry for welcome emails that exhausted their automatic attempts.
+// Only active, confirmed subscribers with recorded consent may be retried.
+export async function retryNewsletterWelcomeEmail(subscriberId, now = new Date()) {
+  if (!mongoose.isValidObjectId(subscriberId)) return null;
+
+  const subscriber = await NewsletterSubscriber.findOneAndUpdate({
+    _id: subscriberId,
+    status: "active",
+    confirmedAt: { $ne: null },
+    "consent.acceptedAt": { $ne: null },
+    welcomeEmailStatus: "failed",
+  }, {
+    $set: {
+      welcomeEmailStatus: "queued",
+      welcomeEmailAttempts: 0,
+      welcomeEmailNextAttemptAt: now,
+      welcomeEmailLeaseUntil: null,
+      welcomeEmailQueuedAt: now,
+      welcomeEmailLastError: "",
+    },
+  }, { new: true }).select("_id");
+
+  if (!subscriber) {
+    const existing = await NewsletterSubscriber.findById(subscriberId)
+      .select("_id status confirmedAt consent.acceptedAt welcomeEmailStatus")
+      .lean();
+    return existing ? { conflict: true, welcomeEmailStatus: existing.welcomeEmailStatus } : null;
+  }
+
+  await processNewsletterWelcomeEmails(now, subscriber._id);
+  return NewsletterSubscriber.findById(subscriber._id)
+    .select("_id welcomeEmailStatus welcomeEmailAttempts welcomeEmailSentAt welcomeEmailLastError")
+    .lean();
+}
+
 export async function unsubscribeNewsletter(subscriberId, token) {
   if (!mongoose.isValidObjectId(subscriberId) || typeof token !== "string") return false;
   const [expiryText, versionText, signature] = token.split(".");
@@ -306,7 +335,21 @@ export async function processPublishingWorkerOnce(now = new Date()) {
       const unsubscribeApiOrigin = apiOrigin();
       const listUnsubscribeUrl = unsubscribeApiOrigin ? `${unsubscribeApiOrigin}/api/newsletter/unsubscribe?id=${subscriber._id}&token=${token}` : "";
       const image = await campaignImageUrl(freshCampaign);
-      const result = await sendNewsletterAnnouncementEmail({ email: subscriber.email, unsubscribeUrl, listUnsubscribeUrl, content: { type: freshCampaign.type, title: freshCampaign.titleSnapshot, summary: freshCampaign.summarySnapshot, category: freshCampaign.categorySnapshot, url: freshCampaign.urlSnapshot, image } });
+      const result = await sendNewsletterAnnouncementEmail({ email: subscriber.email, unsubscribeUrl, listUnsubscribeUrl, content: {
+        type: freshCampaign.type,
+        title: freshCampaign.titleSnapshot,
+        summary: freshCampaign.summarySnapshot,
+        category: freshCampaign.type === "course" ? source.category : freshCampaign.categorySnapshot,
+        url: freshCampaign.urlSnapshot,
+        image,
+        imageAlt: source.coverImage?.alt || source.title,
+        ...(freshCampaign.type === "course" ? {
+          priceMinor: source.priceMinor,
+          listPriceMinor: source.listPriceMinor,
+          duration: source.duration,
+          deliveryMode: source.deliveryMode,
+        } : {}),
+      } });
       if (result.status === "sent") {
         await NewsletterDelivery.updateOne({ _id: leased._id, status: "processing", leaseUntil: leased.leaseUntil }, { $set: { status: "sent", acceptedAt: new Date(), providerMessageId: String(result.messageId || "").slice(0, 200), lastError: "", leaseUntil: null } });
       } else {

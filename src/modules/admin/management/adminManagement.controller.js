@@ -3,7 +3,9 @@ import Admin from "../auth/admin.model.js";
 import AdminInvitation from "../auth/adminInvitation.model.js";
 import AdminAuditEvent from "./adminAudit.model.js";
 import { initiatePasswordReset, resendAdminInvitation } from "../auth/auth.controller.js";
-import { isValidPermissionList, LEGACY_ADMIN_PERMISSIONS, normalizePermissions } from "./permissions.js";
+import { hashPassword } from "../auth/auth.service.js";
+import { normalizeEmail, validateAdminName, validatePassword } from "../auth/auth.validation.js";
+import { DEFAULT_ADMIN_PERMISSIONS, isValidPermissionList, LEGACY_ADMIN_PERMISSIONS, normalizePermissions } from "./permissions.js";
 
 const PAGE_SIZE_MAX = 100;
 
@@ -37,7 +39,7 @@ export async function listAdministrators(req, res, next) {
       filter.$or = [{ name: pattern }, { email: pattern }];
     }
     if (req.query.role !== undefined) {
-      if (!["admin", "superadmin"].includes(req.query.role)) return res.status(400).json({ error: "Invalid administrator role filter." });
+      if (!["admin", "superadmin", "staff"].includes(req.query.role)) return res.status(400).json({ error: "Invalid administrator role filter." });
       filter.role = req.query.role;
     }
     if (req.query.status !== undefined) {
@@ -172,14 +174,90 @@ export async function triggerPasswordReset(req, res, next) {
   } catch (error) { return next(error); }
 }
 
+const AUDIT_CATEGORIES = {
+  signin: /^(login\.|logout$)/,
+  accounts: /^(account\.|permissions\.|invitation\.|password\.|password_reset\.)/,
+  changes: /^activity\./,
+};
+
 export async function listAdminAuditEvents(req, res, next) {
   try {
     const { page, limit, skip } = pageOptions(req.query);
+    const filter = {};
+    if (req.query.category) {
+      const pattern = AUDIT_CATEGORIES[req.query.category];
+      if (!pattern) return res.status(400).json({ error: "Invalid activity category." });
+      filter.action = pattern;
+    }
+    if (req.query.actor) {
+      if (!mongoose.isValidObjectId(req.query.actor)) return res.status(400).json({ error: "Invalid user filter." });
+      filter.actorId = req.query.actor;
+    }
     const [items, total] = await Promise.all([
-      AdminAuditEvent.find().populate("actorId", "name email role").populate("targetAdminId", "name email role")
+      AdminAuditEvent.find(filter).populate("actorId", "name email role").populate("targetAdminId", "name email role")
         .sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean().exec(),
-      AdminAuditEvent.countDocuments(),
+      AdminAuditEvent.countDocuments(filter),
     ]);
     return res.json({ items, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
+  } catch (error) { return next(error); }
+}
+
+
+// SECTION: SUPER ADMIN CREATES AN ACCOUNT WITH A PASSWORD
+const CREATABLE_ROLES = ["admin", "staff"];
+const STAFF_DEFAULT_PERMISSIONS = ["dashboard:view", "enquiries:list", "enquiries:details"];
+
+export async function createAdministrator(req, res, next) {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const name = req.body?.name;
+    const role = req.body?.role;
+    const password = req.body?.password;
+    if (!email || !validateAdminName(name)) return res.status(400).json({ error: "Enter a valid name and email address." });
+    if (!CREATABLE_ROLES.includes(role)) return res.status(400).json({ error: "Choose Admin or Staff as the role." });
+    if (!validatePassword(password)) return res.status(400).json({ error: "The password must be at least 12 characters." });
+    const fallback = role === "staff" ? STAFF_DEFAULT_PERMISSIONS : DEFAULT_ADMIN_PERMISSIONS;
+    const permissions = req.body?.permissions === undefined ? [...fallback] : req.body.permissions;
+    if (!isValidPermissionList(permissions)) return res.status(400).json({ error: "The permission selection is invalid." });
+    if (await Admin.exists({ email })) return res.status(409).json({ error: "An account already uses that email address." });
+
+    const created = await Admin.create({
+      name: name.trim(), email, role, isActive: true,
+      passwordHash: await hashPassword(password),
+      permissions: [...new Set(permissions)],
+    });
+    await audit(req.admin.id, created._id, "account.created", { email, role, permissions: created.permissions });
+    return res.status(201).json({ item: { id: created.id, name: created.name, email, role, permissions: created.permissions } });
+  } catch (error) { return next(error); }
+}
+
+export async function setAdministratorPassword(req, res, next) {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return invalidId(res);
+    if (req.params.id === req.admin.id) return res.status(400).json({ error: "Use Forgot password on the sign-in page to change your own password." });
+    if (!validatePassword(req.body?.password)) return res.status(400).json({ error: "The password must be at least 12 characters." });
+    const target = await Admin.findOne({ _id: req.params.id, removedAt: null }).exec();
+    if (!target) return res.status(404).json({ error: "Account not found." });
+    if (target.role === "superadmin") return res.status(400).json({ error: "A Super Admin password can only be changed through Forgot password." });
+    target.passwordHash = await hashPassword(req.body.password);
+    target.sessionVersion = (target.sessionVersion || 0) + 1;
+    await target.save();
+    await audit(req.admin.id, target._id, "password.set_by_superadmin");
+    return res.json({ message: "Password updated. The user has been signed out of other sessions." });
+  } catch (error) { return next(error); }
+}
+
+export async function setAdministratorRole(req, res, next) {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return invalidId(res);
+    if (!CREATABLE_ROLES.includes(req.body?.role)) return res.status(400).json({ error: "Choose Admin or Staff as the role." });
+    const target = await Admin.findOne({ _id: req.params.id, removedAt: null }).exec();
+    if (!target) return res.status(404).json({ error: "Account not found." });
+    if (target.role === "superadmin") return res.status(400).json({ error: "The Super Admin role cannot be changed here." });
+    const previous = target.role;
+    target.role = req.body.role;
+    await target.save();
+    await audit(req.admin.id, target._id, "account.role_changed", { previous, current: target.role });
+    return res.json({ item: { id: target.id, role: target.role } });
   } catch (error) { return next(error); }
 }

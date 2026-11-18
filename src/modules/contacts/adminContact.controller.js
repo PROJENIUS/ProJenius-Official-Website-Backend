@@ -13,6 +13,7 @@ import Enquiry from "./enquiry.model.js";
 import { JobApplication } from "../careers/index.js";
 import { PRIVATE_UPLOAD_DIR } from "./enquiry.upload.js";
 import { generateSubmissionPdf } from "../../shared/pdf/index.js";
+import { retrySubmissionNotifications } from "./enquiry.service.js";
 
 const ENQUIRY_STATUSES = [
   "new",
@@ -564,3 +565,23 @@ export async function downloadJobApplicationReceipt(req, res, next) {
     return next(error);
   }
 }
+
+// SECTION: RETRY FAILED EMAILS
+function retryHandler(kind) {
+  return async function retryEmails(req, res, next) {
+    try {
+      if (!mongoose.isValidObjectId(req.params.id)) return invalidId(res);
+      const result = await retrySubmissionNotifications({ kind, id: req.params.id });
+      if (!result) return notFound(res);
+      if (result.alreadySent) return res.status(200).json({ message: "Both emails were already sent.", item: result });
+      const ok = result.customerEmailStatus === "sent" && result.adminEmailStatus === "sent";
+      return res.status(ok ? 200 : 502).json({
+        message: ok ? "Emails sent." : "The email could not be sent. Check the Gmail settings and try again.",
+        error: ok ? undefined : "The email could not be sent. Check the Gmail settings and try again.",
+        item: result,
+      });
+    } catch (error) { return next(error); }
+  };
+}
+export const retryEnquiryEmails = retryHandler("enquiry");
+export const retryJobApplicationEmails = retryHandler("job");

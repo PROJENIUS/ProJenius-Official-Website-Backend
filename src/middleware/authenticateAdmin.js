@@ -75,7 +75,7 @@ export async function authenticateAdmin(req, res, next) {
     const admin = await Admin.findOne({
       _id: adminId,
       isActive: true,
-      role: { $in: ["superadmin", "admin"] },
+      role: { $in: ["superadmin", "admin", "staff"] },
     })
       .select("_id email name role permissions")
       .select("sessionVersion")

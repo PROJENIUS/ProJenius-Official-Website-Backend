@@ -10,6 +10,7 @@ import AdminInvitation from "./adminInvitation.model.js";
 import PasswordReset from "./passwordReset.model.js";
 import AdminAuditEvent from "../management/adminAudit.model.js";
 import { DEFAULT_ADMIN_PERMISSIONS, isValidPermissionList } from "../management/permissions.js";
+import { getAdminSiteOrigin } from "../../../config/siteOrigins.js";
 import { sendInvitationEmail, sendPasswordResetEmail } from "./authEmail.service.js";
 
 import {
@@ -25,9 +26,7 @@ const INVITATION_MS = 24 * 60 * 60 * 1000;
 const RESET_MS = 30 * 60 * 1000;
 const hashToken = (token) => createHash("sha256").update(token).digest("hex");
 function adminSiteLink(path, token) {
-  const origin = process.env.ADMIN_SITE_ORIGIN?.replace(/\/+$/, "");
-  if (!origin) throw new Error("Admin site origin is not configured.");
-  return `${origin}${path}?token=${encodeURIComponent(token)}`;
+  return `${getAdminSiteOrigin()}${path}?token=${encodeURIComponent(token)}`;
 }
 
 // SECTION: SESSION POLICY
@@ -77,7 +76,17 @@ export async function loginAdmin(req, res, next) {
       : false;
 
     if (!admin || !passwordMatches || !admin.isActive ||
-        !["superadmin", "admin"].includes(admin.role)) {
+        !["superadmin", "admin", "staff"].includes(admin.role)) {
+      await AdminAuditEvent.create({
+        actorId: admin?._id || null,
+        targetAdminId: admin?._id || null,
+        action: "login.failed",
+        metadata: {
+          email: result.email,
+          reason: !admin ? "unknown_email" : !passwordMatches ? "wrong_password" : "account_inactive",
+          ip: req.ip,
+        },
+      }).catch(() => {});
       return res.status(401).json({
         error: "Invalid email or password.",
       });
@@ -110,6 +119,10 @@ export async function loginAdmin(req, res, next) {
 
         admin.lastLoginAt = new Date(now);
         await admin.save();
+        await AdminAuditEvent.create({
+          actorId: admin._id, targetAdminId: admin._id, action: "login.success",
+          metadata: { rememberMe, ip: req.ip },
+        }).catch(() => {});
 
         await new Promise((resolve, reject) => {
           req.session.save((saveError) => {
@@ -134,6 +147,10 @@ export async function loginAdmin(req, res, next) {
 
 // SECTION: ADMIN LOGOUT
 export function logoutAdmin(req, res, next) {
+  const adminId = req.session?.adminId;
+  if (adminId) {
+    AdminAuditEvent.create({ actorId: adminId, targetAdminId: adminId, action: "logout", metadata: {} }).catch(() => {});
+  }
   req.session.destroy((error) => {
     if (error) return next(error);
 

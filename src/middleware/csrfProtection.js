@@ -8,6 +8,7 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
+import { getAdminSiteOrigin, isAllowedAdminOrigin } from "../config/siteOrigins.js";
 
 // SECTION: CREATE OR REUSE SESSION TOKEN
 export function issueCsrfToken(req, res, next) {
@@ -27,8 +28,7 @@ export function issueCsrfToken(req, res, next) {
 // SECTION: VERIFY CSRF TOKEN
 export function csrfProtection(req, res, next) {
   const origin = req.get("origin");
-  const allowedOrigin = process.env.ADMIN_SITE_ORIGIN?.replace(/\/+$/, "");
-  const normalizedOrigin = origin?.replace(/\/+$/, "");
+  const allowedOrigin = getAdminSiteOrigin();
 
   function logAuthDiagnostic(details) {
     if (process.env.AUTH_DIAGNOSTICS === "1") {
@@ -42,7 +42,7 @@ export function csrfProtection(req, res, next) {
   }
 
   // Browser mutations must originate from the configured admin UI.
-  if (!normalizedOrigin || normalizedOrigin !== allowedOrigin) {
+  if (!isAllowedAdminOrigin(origin)) {
     logAuthDiagnostic({
       reason: "origin_missing_or_not_allowed",
       hasOrigin: Boolean(origin),

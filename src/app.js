@@ -14,9 +14,11 @@ import MongoStore from "connect-mongo";
 import multer from "multer";
 import mongoose from "mongoose";
 import { DATABASE_NAME } from "./config/database.js";
+import { getAllowedOrigins } from "./config/siteOrigins.js";
 import { razorpayWebhook } from "./modules/courses/courses.controller.js";
 
 import { registerApiRoutes } from "./routes/index.js";
+import { adminActivityLog } from "./middleware/adminActivityLog.js";
 
 const app = express();
 
@@ -32,10 +34,6 @@ app.use(helmet());
 // SECTION: ENVIRONMENT VALIDATION
 const isProduction = process.env.NODE_ENV === "production";
 
-if (!process.env.ADMIN_SITE_ORIGIN) {
-  throw new Error("ADMIN_SITE_ORIGIN is not configured.");
-}
-
 if (!process.env.MONGODB_URI) {
   throw new Error("MONGODB_URI is not configured.");
 }
@@ -50,12 +48,7 @@ if (
 }
 
 // SECTION: CORS CONFIGURATION
-const allowedOrigins = [
-  process.env.ADMIN_SITE_ORIGIN,
-  process.env.PUBLIC_SITE_ORIGIN,
-]
-  .filter(Boolean)
-  .map((origin) => origin.replace(/\/+$/, ""));
+const allowedOrigins = getAllowedOrigins();
 
 app.use(
   cors({
@@ -86,7 +79,7 @@ app.use(
     },
 
     credentials: true,
-    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "X-CSRF-Token", "Idempotency-Key"],
     maxAge: 600,
   })
@@ -170,6 +163,7 @@ app.get("/api/health", async (_req, res) => {
 });
 
 // SECTION: API ROUTE GROUPS
+app.use(adminActivityLog);
 registerApiRoutes(app);
 
 // SECTION: NOT FOUND

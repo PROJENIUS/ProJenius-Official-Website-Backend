@@ -76,7 +76,17 @@ Required at runtime:
 
 - `MONGODB_URI`
 - `SESSION_SECRET` (at least 32 bytes)
-- `ADMIN_SITE_ORIGIN`
+
+The site origin variables below have production defaults in the application. Set them explicitly in Render so email links, generated asset URLs, and admin redirects always use the deployed sites:
+
+| Variable | Production value |
+| --- | --- |
+| `PUBLIC_SITE_ORIGIN` | `https://pro-jenius-official-website-fronten.vercel.app` |
+| `ADMIN_SITE_ORIGIN` | `https://pro-jenius-admin-website-frontend.vercel.app` |
+| `PUBLIC_API_ORIGIN` | `https://projenius-official-website-backend.onrender.com` |
+| `ADMIN_PANEL_URL` | `https://pro-jenius-admin-website-frontend.vercel.app/` |
+
+Set these in the Render service's Environment settings. In the Vercel project settings, set `VITE_API_BASE_URL` to the backend URL and `VITE_SITE_URL` to the public site URL for the public website; set `VITE_ADMIN_API_URL` to the backend URL for the admin website. Redeploy each project after changing its environment variables. Local `.env` values can remain pointed at localhost for local development.
 
 Optional or feature-specific names referenced by the backend:
 
@@ -91,9 +101,22 @@ Optional or feature-specific names referenced by the backend:
 - `PRIVATE_UPLOAD_DIR`
 - `COMPANY_LOGO_PATH`
 - `PDF_UNICODE_FONT_PATH`
+- `GOOGLE_OAUTH_CLIENT_ID` (OAuth client for the authorized Business Profile account)
+- `GOOGLE_OAUTH_CLIENT_SECRET` (server-side secret; never expose to the frontend)
+- `GOOGLE_OAUTH_REFRESH_TOKEN` (refresh token authorized for the `business.manage` scope)
+- `GOOGLE_BUSINESS_LOCATION_NAME` (verified location resource, such as `accounts/123/locations/456`)
+- `GOOGLE_REVIEWS_PROFILE_URL` (optional HTTPS link to the public review profile)
 - `NODE_ENV`
 
 `MONGODB_DB_NAME` is set by the isolated test harness but the application database name is intentionally fixed in source as `ProJeniusBackend`. `MONGOMS_RUNTIME_DOWNLOAD` is used by the test harness to prevent MongoDB binary downloads when a local test binary is unavailable.
+
+### Google Business Profile reviews
+
+The public `GET /api/reviews` endpoint reads reviews from the configured verified Business Profile location. Google OAuth credentials and location configuration are read only by the backend. If they are absent, the endpoint returns HTTP 503 with code `GOOGLE_REVIEWS_NOT_CONFIGURED`; other routes continue to work. A request without `pageToken` retrieves all provider pages (up to the module safety limit) and returns the complete collection for the website carousel. Supplying Google's `pageToken` returns one page with `nextPageToken`. The Google Business Profile API must be enabled and authorized for the verified ProJenius location before live reviews can be fetched.
+
+To discover the account and location resource names for `GOOGLE_BUSINESS_LOCATION_NAME`, configure `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, and `GOOGLE_OAUTH_REFRESH_TOKEN` in the backend `.env`, then run `node scripts/googleBusinessLocations.js` from this backend directory. The utility exchanges the refresh token, lists accessible accounts and all their locations, and prints a numbered list. Select interactively or rerun with `node scripts/googleBusinessLocations.js --select <number>`; copy the printed `GOOGLE_BUSINESS_LOCATION_NAME=accounts/.../locations/...` assignment into `.env` yourself. It never prints credentials or modifies `.env`. Google Cloud must have approved/enabled the Business Profile Account Management and Business Information APIs, and the refresh token's Google account must have permission to manage the verified profile.
+
+Successful full collections are cached in bounded process memory for five minutes, with concurrent refreshes coalesced. This avoids a database collection and repeated Google calls on a single backend process. With multiple backend instances, each process has its own cache and can refresh independently.
 
 The receipt generator uses `PDF_UNICODE_FONT_PATH` when provided and otherwise checks its known local Noto, Windows Arial, and Linux Noto/DejaVu paths for rupee rendering. Ensure the chosen runtime has an approved Unicode font available.
 

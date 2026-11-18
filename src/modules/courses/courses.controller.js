@@ -9,18 +9,18 @@ import CoursePayment from "./coursePayment.model.js";
 import CourseRefund from "./courseRefund.model.js";
 import CourseWebhookEvent from "./courseWebhookEvent.model.js";
 import CourseReceipt from "./courseReceipt.model.js";
+import CourseCommonFaq from "./courseCommonFaq.model.js";
 import { processVerifiedCourseEnrollment } from "./courseNotifications.service.js";
 import { getRazorpayClient, verifyPaymentSignature, verifyWebhookSignature } from "../../shared/payments/razorpay.service.js";
 import { getOrCreateCourseReceipt, readCourseReceiptFile } from "./courseReceipt.service.js";
-import { enqueueCourseNotification, enqueueDecisionNotification, enqueueScheduleNotifications, listCourseNotificationJobs, processCourseNotificationWorkerOnce, retryCourseNotificationJob, retryCourseNotificationsForEnrollment } from "./courseNotificationQueue.service.js";
-import { CourseValidationError, validateCourseInput, validateStudentInput } from "./courses.validation.js";
+import { enqueueCourseNotification, enqueueScheduleNotifications, listCourseNotificationJobs, processCourseNotificationWorkerOnce, retryCourseNotificationJob, retryCourseNotificationsForEnrollment } from "./courseNotificationQueue.service.js";
+import { CourseValidationError, validateCourseForPublishing, validateCourseInput, validateStudentInput } from "./courses.validation.js";
+import { getCurrentCoursePolicy } from "./courseContent.controller.js";
 import { publicAssetUrl } from "../../shared/http/publicAssetUrl.js";
 import { streamStoredImage, storeImage } from "../../shared/media/gridfsMedia.service.js";
 
-const TERMS_VERSION = process.env.COURSE_TERMS_VERSION?.trim() || "live-training-v2";
-const DEFAULT_TERMS_POLICY = "Please review the programme details, delivery mode, schedule and fees carefully before payment. The registration fee is non-refundable for participant cancellation, non-attendance or a change of personal plans. Batch-change requests are subject to availability and written approval and are not guaranteed. If ProJenius cancels a programme or cannot provide the purchased service, we will address the matter under the applicable cancellation policy and law. Verified duplicate or erroneous charges will be investigated. A registration rejection does not itself mean a refund has been issued; any refund is handled separately and only after review. Payment-provider disputes and any refund required by applicable law will be handled in accordance with applicable requirements. Nothing in these terms removes rights that cannot legally be waived. Your contact details are used to process payment, registration and support. The schedule or venue may change; material updates will be communicated. This policy requires appropriate legal review before production use.";
-const TERMS_POLICY = (process.env.COURSE_TERMS_POLICY?.trim() || DEFAULT_TERMS_POLICY).slice(0, 4000);
 const PAGE_LIMIT = 100;
+const TERMS_VERSION = process.env.COURSE_TERMS_VERSION?.trim() || "live-training-v2";
 const COURSE_TRANSITIONS = Object.freeze({
   publish: ["draft", "scheduled", "unpublished"],
   schedule: ["draft", "scheduled", "unpublished"],
@@ -85,6 +85,14 @@ function publicCourse(course) {
   delete item.registrationDeadline;
   delete item.timezone;
   delete item.createdBy; delete item.updatedBy; delete item.scheduledBy; delete item.publishedBy;
+  const reviews = (item.reviews || []).filter((review) => review.published === true).sort((a, b) => a.order - b.order || new Date(b.reviewDate) - new Date(a.reviewDate));
+  item.reviews = reviews;
+  item.reviewCount = reviews.length;
+  item.rating = reviews.length ? Number((reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length).toFixed(1)) : null;
+  const badgeLabels = { "most-purchased": "Most Purchased", trending: "Trending", "top-rated": "Top Rated" };
+  item.badgeLabel = item.badgeType === "other" ? item.customBadgeLabel : badgeLabels[item.badgeType] || item.badges?.[0] || "";
+  item.faqs = (item.faqs || []).filter((faq) => faq.published !== false).sort((a, b) => a.order - b.order);
+  delete item.relatedCourseIds;
   if (item.coverImage?.mediaId) item.coverImage.url = publicAssetUrl(`/api/media/${item.coverImage.mediaId}`);
   else if (item.coverImage?.filename) item.coverImage.url = publicAssetUrl(`/api/courses/assets/${encodeURIComponent(item.coverImage.filename)}`);
   return item;
@@ -116,8 +124,9 @@ export async function publicListCourses(req, res, next) {
     return res.json({ items: items.map(publicCourse), pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
   } catch (error) { return next(error); }
 }
-export function publicCourseTerms(_req, res) {
-  return res.set("Cache-Control", "no-store").json({ item: { version: TERMS_VERSION, policy: TERMS_POLICY } });
+export async function publicCourseTerms(_req, res, next) {
+  try { return res.set("Cache-Control", "no-store").json({ item: await getCurrentCoursePolicy() }); }
+  catch (error) { return next(error); }
 }
 
 export async function publicCourseDetail(req, res, next) {
@@ -125,7 +134,28 @@ export async function publicCourseDetail(req, res, next) {
     const item = await Course.findOne({ ...liveDeliveryFilter, slug: req.params.slug, status: "published", publishedAt: { $lte: new Date() } }).select("-internalCostMinor -createdBy -updatedBy -scheduledBy -publishedBy").lean();
     if (!item) return res.status(404).json({ error: "Course not found." });
     res.set("Cache-Control", "public, max-age=60");
-    return res.json({ item: publicCourse(item) });
+    const value = publicCourse(item);
+    const eligible = { ...liveDeliveryFilter, status: "published", publishedAt: { $lte: new Date() } };
+    let related = [];
+    if (Array.isArray(item.relatedCourseIds) && item.relatedCourseIds.length) {
+      const selected = await Course.find({ ...eligible, _id: { $in: item.relatedCourseIds, $ne: item._id } }).select("-internalCostMinor -createdBy -updatedBy -scheduledBy -publishedBy").lean();
+      const byId = new Map(selected.map((course) => [String(course._id), course]));
+      related = item.relatedCourseIds.map((id) => byId.get(String(id))).filter(Boolean);
+    }
+    if (related.length < 6) {
+      const fallback = await Course.find({ ...eligible, category: item.category, _id: { $nin: [item._id, ...related.map((course) => course._id)] } }).select("-internalCostMinor -createdBy -updatedBy -scheduledBy -publishedBy").sort({ publishedAt: -1, _id: -1 }).limit(6 - related.length).lean();
+      related = [...related, ...fallback];
+    }
+    const commonFaqs = await CourseCommonFaq.find({ published: true }).select("question answer order").sort({ order: 1, _id: 1 }).lean();
+    const faqKeys = new Set();
+    value.faqs = [...commonFaqs, ...(value.faqs || [])].filter((faq) => {
+      const key = faq.question.trim().toLowerCase();
+      if (faqKeys.has(key)) return false;
+      faqKeys.add(key);
+      return true;
+    }).sort((a, b) => a.order - b.order);
+    value.relatedCourses = related.slice(0, 6).map(publicCourse);
+    return res.json({ item: value });
   } catch (error) { return next(error); }
 }
 
@@ -329,6 +359,7 @@ export async function changeCourseState(req, res, next) {
     const item = await Course.findById(req.params.id); if (!item) return res.status(404).json({ error: "Course not found." });
     if (!canTransitionCourse(item.status, action)) return res.status(409).json({ error: "This course cannot use the requested lifecycle transition." });
     if (action === "publish" && item.deliveryMode === "self-paced") return res.status(409).json({ error: "Only live online, in-person or hybrid programmes can be published for registration." });
+    if (["publish", "schedule"].includes(action)) validateCourseForPublishing(item);
     const previous = { status: item.status, scheduledAt: item.scheduledAt };
       if (action === "publish") { const firstPublication = !item.publishedAt; item.status = "published"; item.publishedAt ||= new Date(); item.publishedBy = req.admin.id; item.scheduledAt = null; item.scheduleAuditPending = false; if (firstPublication) item.announcementStatus = "pending"; }
     if (action === "schedule") {
@@ -349,7 +380,8 @@ export async function createPaymentOrder(req, res, next) {
   if (!gateway) return res.status(503).json({ error: "Online course payment is not configured." });
   try {
     const student = validateStudentInput(req.body?.student);
-    if (req.body?.termsAccepted !== true || req.body?.termsVersion !== TERMS_VERSION) return res.status(400).json({ error: "Accept the current course purchase terms to continue." });
+    const currentTerms = await getCurrentCoursePolicy();
+    if (req.body?.termsAccepted !== true || req.body?.termsVersion !== currentTerms.version) return res.status(400).json({ error: "Accept the current course purchase terms to continue." });
     if (!idValid(req.params.courseId)) return res.status(404).json({ error: "Course not found." });
     const course = await Course.findById(req.params.courseId).lean();
     if (!payableCourse(course)) return res.status(409).json({ error: "This course is not currently available for enrollment." });
@@ -368,11 +400,11 @@ export async function createPaymentOrder(req, res, next) {
     const existing = await CourseEnrollment.findOne({ requestKey }).select("-requestKey").lean();
     let enrollment = existing;
     if (existing) {
-      if (asId(existing.courseId) !== asId(course._id) || String(existing.batchId || "") !== String(selectedBatch?._id || "") || existing.student.email !== student.email || existing.student.name !== student.name || existing.student.phone !== student.phone) return res.status(409).json({ error: "This idempotency key is already associated with a different enrollment request." });
+      if (asId(existing.courseId) !== asId(course._id) || String(existing.batchId || "") !== String(selectedBatch?._id || "") || existing.student.email !== student.email || existing.student.name !== student.name || existing.student.phone !== student.phone || JSON.stringify([...(existing.student.preferredDays || [])].sort()) !== JSON.stringify([...student.preferredDays].sort()) || JSON.stringify([...(existing.student.preferredTimeSlots || [])].sort()) !== JSON.stringify([...student.preferredTimeSlots].sort()) || (existing.student.preferredMode || "") !== (student.preferredMode || "")) return res.status(409).json({ error: "This idempotency key is already associated with a different enrollment request." });
       const payment = await CoursePayment.findOne({ enrollmentId: existing._id }).lean();
       if (payment) return res.status(200).json({ enrollment: { reference: existing.reference }, order: { id: payment.orderId, amount: payment.amountMinor, currency: payment.currency }, keyId: gateway.keyId, checkout: { name: "ProJenius", description: course.title, prefill: { name: student.name, email: student.email, contact: student.phone } } });
     } else {
-      enrollment = await CourseEnrollment.create({ reference: `PJ-CRS-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${crypto.randomBytes(8).toString("hex").toUpperCase()}`, requestKey, courseId: course._id, ...(selectedBatch ? { batchId: selectedBatch._id, batchSnapshot: { code: selectedBatch.code, label: selectedBatch.label, deliveryMode: selectedBatch.deliveryMode, startsAt: selectedBatch.startsAt, timezone: selectedBatch.timezone } } : {}), courseSnapshot: { title: course.title, slug: course.slug, amountMinor: course.priceMinor, currency: "INR" }, student, terms: { version: TERMS_VERSION, acceptedAt: new Date(), policy: TERMS_POLICY }, approvalStatus: "awaiting_approval" });
+      enrollment = await CourseEnrollment.create({ reference: `PJ-CRS-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${crypto.randomBytes(8).toString("hex").toUpperCase()}`, requestKey, courseId: course._id, ...(selectedBatch ? { batchId: selectedBatch._id, batchSnapshot: { code: selectedBatch.code, label: selectedBatch.label, deliveryMode: selectedBatch.deliveryMode, startsAt: selectedBatch.startsAt, timezone: selectedBatch.timezone } } : {}), courseSnapshot: { title: course.title, slug: course.slug, amountMinor: course.priceMinor, currency: "INR" }, student, terms: { version: currentTerms.version, acceptedAt: new Date(), policy: currentTerms.policy } });
     }
     const order = await gateway.client.orders.create({ amount: course.priceMinor, currency: "INR", receipt: enrollment.reference.slice(-40), notes: { enrollmentReference: enrollment.reference, courseSlug: course.slug } });
     if (!order?.id || Number(order.amount) !== course.priceMinor || order.currency !== "INR") return res.status(502).json({ error: "The payment provider returned an invalid course order." });
@@ -560,10 +592,6 @@ export async function listCourseEnrollments(req, res, next) {
       if (!["pending_payment", "enrolled", "payment_failed", "cancelled", "refunded"].includes(req.query.status)) return res.status(400).json({ error: "Invalid enrollment status." });
       filter.status = req.query.status;
     }
-    if (req.query.approvalStatus) {
-      if (!["awaiting_approval", "approved", "rejected"].includes(req.query.approvalStatus)) return res.status(400).json({ error: "Invalid approval status." });
-      filter.approvalStatus = req.query.approvalStatus;
-    }
     if (req.query.courseId) { if (!idValid(req.query.courseId)) return res.status(400).json({ error: "Invalid course ID." }); filter.courseId = req.query.courseId; }
     if (req.query.search) {
       if (typeof req.query.search !== "string" || req.query.search.length > 120) return res.status(400).json({ error: "Enrolment search is invalid." });
@@ -572,7 +600,7 @@ export async function listCourseEnrollments(req, res, next) {
     }
     const range = dateRange(req.query); if (range) filter.createdAt = range;
     const [items, total] = await Promise.all([CourseEnrollment.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(), CourseEnrollment.countDocuments(filter)]);
-    return res.json({ items: items.map((item) => ({ ...item, approvalStatus: item.approvalStatus || (item.status === "enrolled" ? "awaiting_approval" : null) })), pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
+    return res.json({ items, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
   } catch (error) { return next(error); }
 }
 
@@ -592,66 +620,10 @@ export async function getCourseEnrollment(req, res, next) {
     if (safeBatch && !canViewPrivate) for (const session of safeBatch.sessions || []) for (const key of ["onlinePlatform", "onlineJoinUrl", "onlineAccessCode", "venueName", "venueAddress", "reportingTime"]) delete session[key];
     return res.json({ item: {
       ...enrollment,
-      approvalStatus: enrollment.approvalStatus || (enrollment.status === "enrolled" ? "awaiting_approval" : null),
       course: course ? { title: course.title, slug: course.slug, deliveryMode: enrollment.batchSnapshot?.deliveryMode || course.deliveryMode, startDate: enrollment.batchSnapshot?.startsAt || course.startDate, duration: course.duration, batch: safeBatch, ...(canViewPrivate ? { deliveryDetails: course.deliveryDetails } : {}) } : null,
       payment,
       refunds,
     } });
-  } catch (error) { return next(error); }
-}
-
-async function sendDecisionNotification(enrollmentId) {
-  const enrollment = await CourseEnrollment.findById(enrollmentId).lean();
-  if (!enrollment || !["approved", "rejected"].includes(enrollment.approvalStatus)) return null;
-  const course = await Course.findById(enrollment.courseId).lean();
-  if (!course) return null;
-  await enqueueDecisionNotification(enrollment, course, enrollment.approvalStatus);
-  const result = await processCourseNotificationWorkerOnce();
-  const outcome = await CourseEnrollment.findById(enrollmentId).select("approvalEmailStatus").lean();
-  return { status: outcome?.approvalEmailStatus || result[0]?.status || "queued" };
-}
-
-export async function decideCourseEnrollment(req, res, next) {
-  const { action, reason = "" } = req.body || {};
-  if (!idValid(req.params.id)) return res.status(400).json({ error: "Invalid registration ID." });
-  if (!["approve", "reject"].includes(action)) return res.status(400).json({ error: "Choose approve or reject." });
-  if (action === "reject" && (typeof reason !== "string" || reason.trim().length < 5 || reason.trim().length > 500)) return res.status(400).json({ error: "Provide a rejection reason between 5 and 500 characters." });
-  try {
-    const enrollment = await CourseEnrollment.findById(req.params.id).lean();
-    if (!enrollment) return res.status(404).json({ error: "Registration not found." });
-    if (enrollment.status !== "enrolled") return res.status(409).json({ error: "Only a verified captured registration can be reviewed." });
-    const payment = await CoursePayment.findOne({ enrollmentId: enrollment._id, status: { $in: ["captured", "partially_refunded"] } }).lean();
-    if (!payment) return res.status(409).json({ error: "A captured payment is required before review." });
-    const currentApproval = enrollment.approvalStatus || "awaiting_approval";
-    if (currentApproval !== "awaiting_approval") return res.status(409).json({ error: "This registration has already been reviewed." });
-    const course = await Course.findById(enrollment.courseId).lean();
-    if (!course) return res.status(409).json({ error: "The programme associated with this registration is unavailable." });
-    const status = action === "approve" ? "approved" : "rejected";
-    const at = new Date();
-    const decisionReason = action === "reject" ? reason.trim() : "";
-    const updated = await CourseEnrollment.updateOne(
-      { _id: enrollment._id, status: "enrolled", $or: [{ approvalStatus: "awaiting_approval" }, { approvalStatus: { $exists: false } }] },
-      { $set: { approvalStatus: status, approvalReason: decisionReason, approvalAt: at, approvalBy: req.admin.id, approvalEmailStatus: "pending" }, $push: { approvalHistory: { action: status, reason: decisionReason, actorAdminId: req.admin.id, at } } },
-    );
-    if (!updated.modifiedCount) {
-      return res.status(409).json({ error: "This registration was reviewed by another administrator." });
-    }
-    await CourseAudit.create({ eventKey: `registration-decision:${enrollment._id}:${at.getTime()}`, courseId: course._id, actorId: req.admin.id, action: `registration.${status}`, changes: { approvalStatus: { from: "awaiting_approval", to: status }, reason: decisionReason }, metadata: { enrollmentId: String(enrollment._id), reference: enrollment.reference } });
-    const notification = await sendDecisionNotification(enrollment._id);
-    return res.json({ item: { id: String(enrollment._id), reference: enrollment.reference, approvalStatus: status, approvalEmailStatus: notification?.status || "failed" } });
-  } catch (error) { return next(error); }
-}
-
-export async function retryCourseDecisionNotification(req, res, next) {
-  if (!idValid(req.params.id)) return res.status(400).json({ error: "Invalid registration ID." });
-  try {
-    const enrollment = await CourseEnrollment.findById(req.params.id).lean();
-    if (!enrollment) return res.status(404).json({ error: "Registration not found." });
-    if (!["approved", "rejected"].includes(enrollment.approvalStatus)) return res.status(409).json({ error: "A reviewed registration is required before sending this notification." });
-    if (enrollment.approvalEmailStatus === "sent") return res.status(409).json({ error: "The decision email was already sent." });
-    await retryCourseNotificationsForEnrollment(enrollment._id, [enrollment.approvalStatus]);
-    const updated = await CourseEnrollment.findById(enrollment._id).select("approvalEmailStatus").lean();
-    return res.json({ item: { reference: enrollment.reference, approvalStatus: enrollment.approvalStatus, approvalEmailStatus: updated?.approvalEmailStatus || "failed" } });
   } catch (error) { return next(error); }
 }
 

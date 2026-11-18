@@ -39,7 +39,7 @@ function getSafeAttachment(file) {
 }
 
 async function notifySubmission(
-  { Model, record, isJobApplication },
+  { Model, record, isJobApplication, channels = { customer: true, admin: true } },
   runtime
 ) {
   try {
@@ -81,10 +81,11 @@ async function notifySubmission(
       createdAt: record.createdAt,
       pdfBuffer,
       isJobApplication,
-    });
+    }, channels);
 
-    const customerStatus = outcomes?.customer?.status === "sent" ? "sent" : "failed";
-    const adminStatus = outcomes?.admin?.status === "sent" ? "sent" : "failed";
+    // A retry sends only the failed emails; keep the status of the one already sent.
+    const customerStatus = channels.customer === false ? record.customerEmailStatus : outcomes?.customer?.status === "sent" ? "sent" : "failed";
+    const adminStatus = channels.admin === false ? record.adminEmailStatus : outcomes?.admin?.status === "sent" ? "sent" : "failed";
     const failures = [
       customerStatus === "failed" && `Customer email: ${outcomes?.customer?.error || "delivery failed."}`,
       adminStatus === "failed" && `Administrator email: ${outcomes?.admin?.error || "delivery failed."}`,
@@ -113,8 +114,8 @@ async function notifySubmission(
         {
           $set: {
             emailStatus: "failed",
-            customerEmailStatus: "failed",
-            adminEmailStatus: "failed",
+            ...(channels.customer === false ? {} : { customerEmailStatus: "failed" }),
+            ...(channels.admin === false ? {} : { adminEmailStatus: "failed" }),
             emailError: "Notification processing failed.",
           },
         }
@@ -225,4 +226,17 @@ export async function deleteStoredUpload(file) {
         console.error("Could not remove failed contact upload.");
     }
   }
+}
+
+// SECTION: RETRY FAILED SUBMISSION EMAILS (admin action)
+// Sends again only the emails that did not go out, and waits for the result.
+export async function retrySubmissionNotifications({ kind, id }) {
+  const Model = kind === "job" ? JobApplication : Enquiry;
+  const record = await Model.findById(id).lean();
+  if (!record) return null;
+  const channels = { customer: record.customerEmailStatus !== "sent", admin: record.adminEmailStatus !== "sent" };
+  if (!channels.customer && !channels.admin) return { alreadySent: true, customerEmailStatus: "sent", adminEmailStatus: "sent" };
+  await notifySubmission({ Model, record, isJobApplication: kind === "job", channels }, notificationRuntime);
+  const updated = await Model.findById(id).select("emailStatus customerEmailStatus adminEmailStatus emailError").lean();
+  return updated;
 }

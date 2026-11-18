@@ -46,6 +46,8 @@ export async function initializeDatabaseModels() {
     (await import("../modules/courses/courseWebhookEvent.model.js")).default,
     (await import("../modules/courses/courseNotificationJob.model.js")).default,
     (await import("../modules/courses/courseReceipt.model.js")).default,
+    (await import("../modules/courses/courseCommonFaq.model.js")).default,
+    (await import("../modules/courses/coursePolicy.model.js")).default,
     (await import("../modules/publishing/contentArticle.model.js")).default,
     (await import("../modules/publishing/newsletterSubscriber.model.js")).default,
     (await import("../modules/publishing/newsletterCampaign.model.js")).default,
