@@ -70,7 +70,7 @@ function validateBookingInput(body, settings) {
   const hhmm = `${String(ist.getUTCHours()).padStart(2, "0")}:${String(ist.getUTCMinutes()).padStart(2, "0")}`;
   const slotType = body?.slotType === "custom" ? "custom" : "fixed";
   if (slotType === "fixed" && !settings.slotTimes.includes(hhmm)) throw Object.assign(new Error("That time is not one of the available slots."), { status: 400 });
-  if (slotType === "custom" && (ist.getUTCMinutes() % 15 !== 0 || ist.getUTCHours() < 8 || ist.getUTCHours() > 21)) throw Object.assign(new Error("Choose a custom time between 8:00 AM and 9:45 PM."), { status: 400 });
+  if (slotType === "custom" && (ist.getUTCMinutes() % 5 !== 0 || ist.getUTCHours() < 8 || ist.getUTCHours() > 21)) throw Object.assign(new Error("Choose a custom time between 8:00 AM and 9:45 PM."), { status: 400 });
   return {
     student: { name, email, phone }, slotStart, slotType,
     slotLabel: text(body?.slotLabel, 120) || hhmm,
