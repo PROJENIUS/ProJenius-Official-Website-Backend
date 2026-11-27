@@ -23,11 +23,15 @@ import { adminActivityLog } from "./middleware/adminActivityLog.js";
 const app = express();
 
 // SECTION: TRUST PROXY
-// Render sits in front of the app: TRUST_PROXY=1 makes secure cookies and
-// per-visitor rate limits work. A number trusts that many proxy hops.
-if (/^[1-3]$/.test(process.env.TRUST_PROXY || "")) {
-  app.set("trust proxy", Number(process.env.TRUST_PROXY));
-}
+// Render sits in front of the app. Trusting that one proxy hop lets Express
+// see the original HTTPS request, which is required to send the Secure admin
+// login cookie (without it the cookie is silently not set and every admin
+// sign-in fails with "Invalid security token") and gives per-visitor rate
+// limits. Production trusts 1 hop by default; TRUST_PROXY=0..3 overrides.
+const trustProxy = /^[0-3]$/.test(process.env.TRUST_PROXY || "")
+  ? Number(process.env.TRUST_PROXY)
+  : (process.env.NODE_ENV === "production" ? 1 : 0);
+if (trustProxy > 0) app.set("trust proxy", trustProxy);
 
 // SECTION: HTTPS ONLY IN PRODUCTION (behind Render's proxy; needs TRUST_PROXY=1)
 if (process.env.NODE_ENV === "production") {
