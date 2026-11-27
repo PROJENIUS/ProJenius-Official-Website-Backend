@@ -12,6 +12,19 @@ import AdminAuditEvent from "../management/adminAudit.model.js";
 import { DEFAULT_ADMIN_PERMISSIONS, isValidPermissionList } from "../management/permissions.js";
 import { getAdminSiteOrigin } from "../../../config/siteOrigins.js";
 import { sendInvitationEmail, sendPasswordResetEmail } from "./authEmail.service.js";
+import { sendSecurityAlertEmail } from "../../../shared/email/email.service.js";
+
+// Alert the admin inbox once when one email reaches this many failures in the window.
+const ALERT_FAILURES = 5;
+const ALERT_WINDOW_MIN = 15;
+async function alertOnRepeatedFailures(email, ip) {
+  const since = new Date(Date.now() - ALERT_WINDOW_MIN * 60 * 1000);
+  const attempts = await AdminAuditEvent.countDocuments({ action: "login.failed", "metadata.email": email, createdAt: { $gte: since } });
+  if (attempts === ALERT_FAILURES) {
+    const result = await sendSecurityAlertEmail({ email, attempts, ip, minutes: ALERT_WINDOW_MIN });
+    await AdminAuditEvent.create({ actorId: null, targetAdminId: null, action: "security.alert_sent", metadata: { email, attempts, status: result.status } }).catch(() => {});
+  }
+}
 
 import {
   findAdminForLogin,
@@ -87,6 +100,7 @@ export async function loginAdmin(req, res, next) {
           ip: req.ip,
         },
       }).catch(() => {});
+      alertOnRepeatedFailures(result.email, req.ip).catch(() => {});
       return res.status(401).json({
         error: "Invalid email or password.",
       });

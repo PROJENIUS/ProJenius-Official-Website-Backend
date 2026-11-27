@@ -14,6 +14,7 @@ import { JobApplication } from "../careers/index.js";
 import { PRIVATE_UPLOAD_DIR } from "./enquiry.upload.js";
 import { generateSubmissionPdf } from "../../shared/pdf/index.js";
 import { retrySubmissionNotifications } from "./enquiry.service.js";
+import { sendPrivateFile } from "../../shared/media/privateFiles.service.js";
 
 const ENQUIRY_STATUSES = [
   "new",
@@ -475,6 +476,7 @@ export async function downloadEnquiryAttachment(req, res, next) {
       });
     }
 
+    if (await sendPrivateFile(res, enquiry.attachment.storedName, path.basename(enquiry.attachment.originalName || "attachment"))) return undefined;
     const filepath = getPrivateFilePath(enquiry.attachment.storedName);
 
     return sendPrivateDownload(
@@ -507,6 +509,7 @@ export async function downloadJobApplicationResume(req, res, next) {
       });
     }
 
+    if (await sendPrivateFile(res, application.resume.storedName, path.basename(application.resume.originalName || "resume"))) return undefined;
     const filepath = getPrivateFilePath(application.resume.storedName);
 
     return sendPrivateDownload(

@@ -12,7 +12,7 @@ import CourseReceipt from "./courseReceipt.model.js";
 import CourseCommonFaq from "./courseCommonFaq.model.js";
 import { processVerifiedCourseEnrollment } from "./courseNotifications.service.js";
 import { getRazorpayClient, verifyPaymentSignature, verifyWebhookSignature } from "../../shared/payments/razorpay.service.js";
-import { getOrCreateCourseReceipt, readCourseReceiptFile } from "./courseReceipt.service.js";
+import { getOrCreateCourseReceipt } from "./courseReceipt.service.js";
 import { enqueueCourseNotification, enqueueScheduleNotifications, listCourseNotificationJobs, processCourseNotificationWorkerOnce, retryCourseNotificationJob, retryCourseNotificationsForEnrollment } from "./courseNotificationQueue.service.js";
 import { CourseValidationError, validateCourseForPublishing, validateCourseInput, validateStudentInput } from "./courses.validation.js";
 import { getCurrentCoursePolicy } from "./courseContent.controller.js";
@@ -496,8 +496,7 @@ export async function downloadPublicCourseReceipt(req, res, next) {
     const payment = await CoursePayment.findOne({ enrollmentId: enrollment._id, status: { $in: ["captured", "partially_refunded", "refunded"] } }).sort({ capturedAt: -1 }).lean();
     const receipt = await CourseReceipt.findOne({ enrollmentId: enrollment._id }).lean();
     if (!payment || !receipt || String(receipt.paymentId) !== String(payment._id)) return res.status(404).json({ error: "This receipt link is invalid or expired." });
-    const pdf = await readCourseReceiptFile(receipt.filename);
-    if (crypto.createHash("sha256").update(pdf).digest("hex") !== receipt.sha256) return res.status(404).json({ error: "This receipt link is invalid or expired." });
+    const { buffer: pdf } = await getOrCreateCourseReceipt({ enrollment, payment, details: { reference: enrollment.reference, student: enrollment.student, courseTitle: enrollment.courseSnapshot.title, amountMinor: payment.amountMinor, paymentId: payment.paymentId, paidAt: payment.capturedAt || enrollment.paidAt } });
     res.set({ "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="ProJenius-Course-${enrollment.reference}.pdf"`, "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer" });
     return res.send(pdf);
   } catch (error) { return next(error); }

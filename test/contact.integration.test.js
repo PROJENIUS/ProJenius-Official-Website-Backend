@@ -351,7 +351,7 @@ test("Contact API uses isolated persistence and deterministic notification stubs
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Origin: adminOrigin,
+        Origin: "https://not-the-admin.example",
         Cookie: cookie,
         "X-CSRF-Token": body.csrfToken,
       },
@@ -712,8 +712,9 @@ test("Contact API uses isolated persistence and deterministic notification stubs
       const record = await JobApplication.findOne({ referenceNumber: body.data.referenceNumber }).lean();
       assert.ok(record.resume);
       assert.equal(record.resume.originalName, resume.fileName);
-      const storedPath = path.join(uploadDirectory, record.resume.storedName);
-      assert.equal(await fs.stat(storedPath).then(() => true, () => false), true);
+      // Uploads are kept in MongoDB (GridFS) because a free host's disk is temporary.
+      const { findPrivateFile } = await import("../src/shared/media/privateFiles.service.js");
+      assert.ok(await findPrivateFile(record.resume.storedName), `${resume.fileName} should be stored in MongoDB`);
       await runNextNotification();
     }
   });

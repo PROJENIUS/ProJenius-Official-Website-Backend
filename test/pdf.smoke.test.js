@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { generateSubmissionPdf } from "../src/shared/pdf/index.js";
+import { getPublicSiteOrigin } from "../src/config/siteOrigins.js";
 
 const REFERENCE = "PJ-ENQ-20261014-ABCDEF12";
 const FOOTER_NOTE = "This is a system-generated receipt. No physical signature is required.";
-const FOOTER_CONTACT = "projenius.in";
+const FOOTER_CONTACT = new URL(getPublicSiteOrigin()).hostname;
 
 function decodePdfHex(hex) {
   const bytes = Buffer.from(hex, "hex");

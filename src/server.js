@@ -15,6 +15,7 @@ import {
 import { startCoursePublicationScheduler, stopCoursePublicationScheduler } from "./modules/courses/courseScheduler.js";
 import { startCourseNotificationWorker, stopCourseNotificationWorker } from "./modules/courses/courseNotificationQueue.service.js";
 import { startPublishingWorker, stopPublishingWorker } from "./modules/publishing/publishing.service.js";
+import { startKeepAliveScheduler, stopKeepAliveScheduler } from "./modules/keepalive/keepAlive.service.js";
 
 // SECTION: ENVIRONMENT VALIDATION
 function validateEnvironment() {
@@ -66,6 +67,7 @@ async function startServer() {
     startCoursePublicationScheduler();
     startCourseNotificationWorker();
     startPublishingWorker();
+    startKeepAliveScheduler();
 
     server = app.listen(port, () => {
       console.log(`ProJenius API listening on port ${port}`);
@@ -88,6 +90,7 @@ async function startServer() {
       isShuttingDown = true;
       stopCoursePublicationScheduler();
       stopPublishingWorker();
+      stopKeepAliveScheduler();
 
       console.log(`Received ${signal}. Starting shutdown.`);
 

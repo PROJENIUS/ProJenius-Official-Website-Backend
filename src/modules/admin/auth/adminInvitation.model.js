@@ -11,4 +11,4 @@ const adminInvitationSchema = new mongoose.Schema({
   usedAt: { type: Date, default: null },
 }, { timestamps: true });
 
-export default mongoose.models.AdminInvitation || mongoose.model("AdminInvitation", adminInvitationSchema);
+export default mongoose.models.AdminInvitation || mongoose.model("AdminInvitation", adminInvitationSchema, "admin_invitations");

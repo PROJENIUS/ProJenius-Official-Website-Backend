@@ -237,3 +237,16 @@ test("admin can retry failed enquiry emails; only the failed email is sent again
     restore(); delete process.env.GMAIL_USER; delete process.env.GMAIL_APP_PASSWORD; delete process.env.ADMIN_NOTIFICATION_EMAIL;
   }
 });
+
+
+test("five failed sign-ins for one email record a security alert", async () => {
+  const AdminAuditEvent = (await import("../src/modules/admin/management/adminAudit.model.js")).default;
+  for (let i = 0; i < 5; i += 1) {
+    const { result } = await login("target@example.invalid", `wrong-password-${i}`, { fresh: true });
+    assert.equal(result.status, 401);
+  }
+  await new Promise((r) => setTimeout(r, 200));
+  const alert = await AdminAuditEvent.findOne({ action: "security.alert_sent", "metadata.email": "target@example.invalid" }).lean();
+  assert.ok(alert, "an alert is recorded on the fifth failure");
+  assert.equal(alert.metadata.attempts, 5);
+});

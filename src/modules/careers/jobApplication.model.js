@@ -114,10 +114,6 @@ jobApplicationSchema.index({ status: 1, createdAt: -1 });
 
 const JobApplication =
   mongoose.models.JobApplication ||
-  mongoose.model(
-    "JobApplication",
-    jobApplicationSchema,
-    "job_applications"
-  );
+  mongoose.model("JobApplication", jobApplicationSchema, "careers_job_applications");
 
 export default JobApplication;

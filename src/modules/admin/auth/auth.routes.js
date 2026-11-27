@@ -5,7 +5,7 @@
 ========================================================= */
 
 import { Router } from "express";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 
 import {
   getCsrfToken,
@@ -24,9 +24,12 @@ import { csrfProtection } from "../../../middleware/csrfProtection.js";
 const router = Router();
 
 // SECTION: LOGIN RATE LIMIT
+// Counted per network address AND email: behind the Vercel proxy many admins
+// share one address, so an address-only limit would lock everyone out.
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
+  keyGenerator: (req) => `${ipKeyGenerator(req.ip || "")}|${String(req.body?.email || "").trim().toLowerCase().slice(0, 254)}`,
   standardHeaders: "draft-8",
   legacyHeaders: false,
   message: {

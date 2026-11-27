@@ -23,8 +23,18 @@ import { adminActivityLog } from "./middleware/adminActivityLog.js";
 const app = express();
 
 // SECTION: TRUST PROXY
-if (process.env.TRUST_PROXY === "1") {
-  app.set("trust proxy", 1);
+// Render sits in front of the app: TRUST_PROXY=1 makes secure cookies and
+// per-visitor rate limits work. A number trusts that many proxy hops.
+if (/^[1-3]$/.test(process.env.TRUST_PROXY || "")) {
+  app.set("trust proxy", Number(process.env.TRUST_PROXY));
+}
+
+// SECTION: HTTPS ONLY IN PRODUCTION (behind Render's proxy; needs TRUST_PROXY=1)
+if (process.env.NODE_ENV === "production") {
+  app.use((req, res, next) => {
+    if (req.secure || req.get("x-forwarded-proto") !== "http") return next();
+    return res.redirect(308, `https://${req.get("host")}${req.originalUrl}`);
+  });
 }
 
 // SECTION: SECURITY HEADERS

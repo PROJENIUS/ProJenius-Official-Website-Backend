@@ -569,3 +569,28 @@ export async function sendGuidanceEmails({ booking, slot, receiptPdf, detailsPdf
   }
   return statuses;
 }
+
+// SECTION: SECURITY ALERT (repeated failed admin sign-ins)
+export async function sendSecurityAlertEmail({ email, attempts, ip, minutes }) {
+  const sender = process.env.GMAIL_USER?.trim();
+  const to = process.env.ADMIN_NOTIFICATION_EMAIL?.trim();
+  if (!sender || !process.env.GMAIL_APP_PASSWORD || !to) return { status: "not_configured" };
+  try {
+    const panel = adminPanelUrl();
+    await getTransporter().sendMail({
+      from: `"ProJenius Security" <${sender}>`, to,
+      subject: `Security alert: ${attempts} failed admin sign-ins for ${email}`,
+      text: `There were ${attempts} failed sign-in attempts to the ProJenius admin panel for ${email} in the last ${minutes} minutes (last from IP ${ip || "unknown"}).\n\nIf this was not one of your team, review Users & Activity and consider changing that account's password.\n\nAdmin panel: ${panel}`,
+      html: paymentEmailHtml({
+        eyebrow: "PROJENIUS ADMIN · SECURITY",
+        title: "Repeated failed sign-ins",
+        intro: [`There were ${attempts} failed sign-in attempts for ${email} in the last ${minutes} minutes.`, "If this was not one of your team, review Users & Activity and change that account's password."],
+        rows: [["Account", email], ["Attempts", String(attempts)], ["Last IP", ip || "unknown"]],
+        receiptAttached: true,
+        button: { label: "Open Users & Activity", href: panel },
+        footer: ["Sign-ins are also rate-limited automatically."],
+      }).replace(/<p[^>]*>&#128206;[^<]*<\/p>/, ""),
+    });
+    return { status: "sent" };
+  } catch (error) { return { status: "failed", error: getSafeError(error) }; }
+}

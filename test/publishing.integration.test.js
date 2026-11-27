@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { after, before } from "node:test";
 import mongoose from "mongoose";
+import { DEFAULT_PUBLIC_API_ORIGIN } from "../src/config/siteOrigins.js";
 
 let memoryServer, server, api, restoreTransport;
 let Subscriber, Article, Course, Campaign, Delivery, Event, AdminAudit, processWorker, subscribeNewsletter, confirmNewsletter, unsubscribeNewsletter, makeUnsubscribeToken, queuePublication, sendNewsletterWelcomeEmail, sendNewsletterAnnouncementEmail;
@@ -385,7 +386,8 @@ test("public article and course asset references never emit localhost and preser
     assert.equal(publicAssetUrl("/api/news/assets/cover.jpg"), "/api/news/assets/cover.jpg");
     assert.equal(publicAssetUrl("/api/courses/assets/cover.jpg"), "/api/courses/assets/cover.jpg");
     process.env.NODE_ENV = "production";
-    assert.equal(publicAssetUrl("/api/news/assets/cover.jpg"), "/api/news/assets/cover.jpg");
+    // A localhost API origin is ignored in production; the live API address is used so the website can load it.
+    assert.equal(publicAssetUrl("/api/news/assets/cover.jpg"), `${DEFAULT_PUBLIC_API_ORIGIN}/api/news/assets/cover.jpg`);
     process.env.PUBLIC_API_ORIGIN = "https://media-api.example.invalid/base";
     assert.equal(publicAssetUrl("/api/news/assets/cover.jpg"), "https://media-api.example.invalid/api/news/assets/cover.jpg");
   } finally {
@@ -429,6 +431,17 @@ test("article validation enforces five images and allowlists HTTPS YouTube/Vimeo
   const base = { contentType: "news", title: "Synthetic media", slug: "synthetic-media", summary: "Summary", body: "Body", images: images.slice(0, 5) };
   assert.equal(validateArticle(base).images.length, 5);
   assert.throws(() => validateArticle({ ...base, images }), { status: 400 });
+  assert.equal(validateArticle({ ...base, category: "x".repeat(20) }).category.length, 20);
+  assert.throws(() => validateArticle({ ...base, category: "x".repeat(21) }), { status: 400, message: /Category must be 20/ });
+  const oldCategory = "x".repeat(40);
+  assert.equal(validateArticle({ ...base, category: oldCategory }, { existing: { category: oldCategory } }).category, oldCategory, "old articles stay editable");
+  assert.throws(() => validateArticle({ ...base, category: "y".repeat(40) }, { existing: { category: oldCategory } }), { status: 400 });
+  assert.throws(() => validateArticle({ ...base, title: "t".repeat(71) }), { status: 400, message: /Title must be 70/ });
+  assert.throws(() => validateArticle({ ...base, summary: "s".repeat(161) }), { status: 400, message: /Summary must be 160/ });
+  assert.throws(() => validateArticle({ ...base, ctaLabel: "c".repeat(23) }), { status: 400, message: /Button text must be 22/ });
+  assert.throws(() => validateArticle({ ...base, author: { name: "n".repeat(41), role: "" } }), { status: 400, message: /Author name/ });
+  assert.equal(validateArticle({ ...base, ctaLabel: "  Read   the Story " }).ctaLabel, "Read the Story");
+  assert.equal(validateArticle({ ...base, title: "t".repeat(100) }, { existing: { title: "t".repeat(100) } }).title.length, 100, "old long titles stay editable");
   assert.deepEqual(validateVideoUrl("https://youtu.be/AbCdEf12345", "Demo"), { provider: "youtube", videoId: "AbCdEf12345", url: "https://www.youtube.com/watch?v=AbCdEf12345", title: "Demo" });
   assert.equal(validateVideoUrl("https://vimeo.com/1234567").provider, "vimeo");
   for (const invalid of ["http://youtu.be/AbCdEf12345", "https://youtube.com.attacker.invalid/watch?v=AbCdEf12345", "javascript:alert(1)", "https://vimeo.com.evil.invalid/1234"]) assert.throws(() => validateVideoUrl(invalid), { status: 400 });
@@ -595,7 +608,12 @@ test("article list permission returns summaries while details require view or ed
   assert.equal(retryUpload.status, 201);
   assert.equal((await retryUpload.json()).item.mediaId, uploadedImage.mediaId, "re-uploading identical content reuses its stable GridFS record");
   assert.equal((await gridfs.find({}).toArray()).length, storedBeforeRetry.length, "an identical retry does not create another GridFS file");
-  const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
+  // Smallest JPEG the size check can read: start marker + a frame header (SOF0) giving 32 × 16 px.
+  const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0, 17, 8, 0, 16, 0, 32, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0xff, 0xd9]);
+  const brokenForm = new FormData();
+  brokenForm.append("image", new Blob([Buffer.from([0xff, 0xd8, 0xff, 0x00])], { type: "image/jpeg" }), "broken.jpg");
+  const brokenUpload = await fetch(`${api}/api/admin/articles/image`, { method: "POST", headers: { Origin: origin, Cookie: sessionCookie, "X-CSRF-Token": loginBody.csrfToken }, body: brokenForm });
+  assert.equal(brokenUpload.status, 400, "a file whose image size cannot be read is refused");
   const jpegForm = new FormData();
   jpegForm.append("image", new Blob([jpegBytes], { type: "image/jpeg" }), "synthetic.jpeg");
   const jpegUpload = await fetch(`${api}/api/admin/articles/image`, { method: "POST", headers: { Origin: origin, Cookie: sessionCookie, "X-CSRF-Token": loginBody.csrfToken }, body: jpegForm });
@@ -646,7 +664,8 @@ test("article list permission returns summaries while details require view or ed
     assert.doesNotMatch(productionList.items[0].thumbnailUrl, /localhost/i);
     process.env.PUBLIC_API_ORIGIN = "http://localhost:5000";
     const productionWithoutLocalOrigin = await (await fetch(`${api}/api/news?search=${encodeURIComponent(imageArticle.title)}`)).json();
-    assert.equal(productionWithoutLocalOrigin.items[0].thumbnailUrl, `/api/media/${uploadedImage.mediaId}`, "a localhost API origin never leaks into a production public response");
+    assert.equal(productionWithoutLocalOrigin.items[0].thumbnailUrl, `${DEFAULT_PUBLIC_API_ORIGIN}/api/media/${uploadedImage.mediaId}`, "a localhost API origin never leaks into a production public response");
+    assert.doesNotMatch(productionWithoutLocalOrigin.items[0].thumbnailUrl, /localhost/i);
   } finally {
     process.env.NODE_ENV = previousNodeEnvironment;
     if (previousPublicApiOrigin === undefined) delete process.env.PUBLIC_API_ORIGIN;

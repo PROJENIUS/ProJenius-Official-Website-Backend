@@ -28,7 +28,7 @@ const legalDocumentSchema = new mongoose.Schema(
     key: {
       type: String,
       required: true,
-      enum: ["terms", "privacy-policy", "course-terms"],
+      enum: ["terms", "privacy-policy", "cookie-policy", "course-terms"],
     },
     title: {
       type: String,
@@ -72,7 +72,7 @@ const legalDocumentSchema = new mongoose.Schema(
   {
     timestamps: true,
     strict: "throw",
-    collection: "legal_documents",
+    collection: "website_legal_documents",
   },
 );
 

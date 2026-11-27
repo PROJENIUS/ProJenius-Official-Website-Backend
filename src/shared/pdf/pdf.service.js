@@ -6,7 +6,8 @@ import { getPublicSiteOrigin } from "../../config/siteOrigins.js";
 
 const COMPANY = {
   name: "ProJenius Innovation Technology Private Limited",
-  website: getPublicSiteOrigin(),
+  // Domain only (e.g. projenius.in) so the header and footer stay on one line.
+  website: new URL(getPublicSiteOrigin()).hostname,
   phone: "8925450473",
   address: "Plot No. 3, Velmurugan Nagar, Erikarai Street, Madurai - 625016",
 };

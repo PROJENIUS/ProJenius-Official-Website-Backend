@@ -60,11 +60,23 @@ export function generateCourseReceipt(details) {
   });
 }
 
+/* Stored PDF: MongoDB copy first, then the old disk file. Null when neither exists. */
+export async function readStoredReceipt(record) {
+  const withPdf = await CourseReceipt.findById(record._id).select("+pdf").lean();
+  if (withPdf?.pdf?.buffer || Buffer.isBuffer(withPdf?.pdf)) return Buffer.from(withPdf.pdf.buffer || withPdf.pdf);
+  try { return await readReceipt(record.filename); } catch { return null; }
+}
+
 export async function getOrCreateCourseReceipt({ enrollment, payment, details, generate = generateCourseReceipt }) {
   const existing = await CourseReceipt.findOne({ enrollmentId: enrollment._id }).lean();
   if (existing) {
-    try { return { record: existing, buffer: await readReceipt(existing.filename) }; }
-    catch { throw new Error("The stored receipt file is unavailable."); }
+    const stored = await readStoredReceipt(existing);
+    if (stored) return { record: existing, buffer: stored };
+    // Lost with a host restart: rebuild the same receipt from the saved payment and keep it in MongoDB.
+    const rebuilt = await generate(details);
+    const sha256 = crypto.createHash("sha256").update(rebuilt).digest("hex");
+    await CourseReceipt.updateOne({ _id: existing._id }, { $set: { pdf: rebuilt, sha256 } });
+    return { record: { ...existing, sha256 }, buffer: rebuilt };
   }
   const buffer = await generate(details);
   await fs.mkdir(RECEIPT_ROOT, { recursive: true });
@@ -75,7 +87,7 @@ export async function getOrCreateCourseReceipt({ enrollment, payment, details, g
     enrollmentId: enrollment._id, paymentId: payment._id,
     receiptNumber: `PJ-RCP-${enrollment.reference}`, filename,
     sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
-    amountMinor: payment.amountMinor, currency: payment.currency, generatedAt: new Date(),
+    amountMinor: payment.amountMinor, currency: payment.currency, generatedAt: new Date(), pdf: buffer,
   };
   try {
     const saved = await CourseReceipt.create(record);
@@ -85,7 +97,7 @@ export async function getOrCreateCourseReceipt({ enrollment, payment, details, g
     if (error.code !== 11000) throw error;
     const raced = await CourseReceipt.findOne({ enrollmentId: enrollment._id }).lean();
     if (!raced) throw error;
-    return { record: raced, buffer: await readReceipt(raced.filename) };
+    return { record: raced, buffer: (await readStoredReceipt(raced)) || buffer };
   }
 }
 

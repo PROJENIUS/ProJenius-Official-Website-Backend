@@ -129,8 +129,11 @@ test("legal documents require authorization, persist edits, and preserve course 
   const missingPublic = await fetch(`${api}/api/legal/terms`);
   assert.equal(missingPublic.status, 200);
   const provisionalPublic = await missingPublic.json();
-  assert.equal(provisionalPublic.item.isProvisional, true);
-  assert.equal(provisionalPublic.item.lastUpdated, null);
+  // Built-in text is final and shows the date it took effect.
+  assert.equal(provisionalPublic.item.isProvisional, false);
+  assert.equal(provisionalPublic.item.lastUpdated, "2026-11-27T10:00:00+05:30");
+  const cookiePolicy = await (await fetch(`${api}/api/legal/cookie-policy`)).json();
+  assert.equal(cookiePolicy.item.title, "Cookie Policy");
 
   const anonymousWrite = await fetch(`${api}/api/legal/admin/terms`, {
     method: "PUT",
@@ -184,12 +187,12 @@ test("legal documents require authorization, persist edits, and preserve course 
   assert.ok(starterBody.item.sections.length >= 14);
 
   const expectedTermsTopics = [
-    "Introduction and acceptance",
-    "Fees and payment",
+    "Our services",
+    "Registration, fees and payment",
     "Intellectual property",
     "Confidentiality",
-    "Governing law and jurisdiction",
-    "Privacy",
+    "Governing law and disputes",
+    "Grievance Officer and contact",
   ];
   for (const topic of expectedTermsTopics) {
     assert.ok(
@@ -204,12 +207,12 @@ test("legal documents require authorization, persist edits, and preserve course 
   );
   const privacyStarter = await privacyResponse.json();
   const expectedPrivacyTopics = [
-    "Information we handle",
-    "Payments",
-    "Newsletter and email",
-    "Sharing",
-    "Retention",
-    "Children and minors",
+    "Personal data we collect",
+    "Your rights",
+    "Who we share it with",
+    "Where and how long we keep it",
+    "Children",
+    "Grievance Officer and contact",
   ];
   for (const topic of expectedPrivacyTopics) {
     assert.ok(

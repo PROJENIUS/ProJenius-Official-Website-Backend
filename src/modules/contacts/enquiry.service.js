@@ -6,6 +6,14 @@ import { createCareerApplication, JobApplication } from "../careers/index.js";
 import { generateSubmissionPdf } from "../../shared/pdf/index.js";
 import { sendSubmissionEmails } from "../../shared/email/index.js";
 import { saveWithUniqueReference } from "../../shared/utilities/index.js";
+import { savePrivateFile } from "../../shared/media/privateFiles.service.js";
+
+/* Copy the upload into MongoDB (the host disk is temporary), then remove the disk copy. */
+async function persistUpload(file) {
+  if (!file?.path) return;
+  await savePrivateFile(file.path, file.filename, { mimeType: file.mimetype, originalName: file.originalname });
+  await fs.unlink(file.path).catch(() => {});
+}
 
 function getCustomerEmail(answers) {
   for (const key of ["email", "emailAddress", "contactEmail"]) {
@@ -167,6 +175,7 @@ function startBackgroundNotifications(options) {
 }
 
 export async function createEnquiry(payload, file) {
+  await persistUpload(file);
   const enquiry = await saveWithUniqueReference(Enquiry, "PJ-ENQ", {
     enquiryType: payload.enquiryType,
     sourcePage: payload.sourcePage,
@@ -197,6 +206,7 @@ export async function createEnquiry(payload, file) {
 }
 
 export async function createJobApplication(payload, resume) {
+  await persistUpload(resume);
   const application = await createCareerApplication(payload, resume);
 
   startBackgroundNotifications({

@@ -24,6 +24,9 @@ const AREAS = [
   [/^\/api\/admin\/articles/, "News & Insights"],
   [/^\/api\/admin\/(newsletter|campaigns|subscribers)/, "Newsletter"],
   [/^\/api\/legal/, "Legal documents"],
+  [/^\/api\/home\/admin\/hero/, "Home Hero"],
+  [/^\/api\/page-heroes\/admin/, "Page heroes"],
+  [/^\/api\/careers\/admin/, "Job openings"],
   [/^\/api\/admin/, "Admin panel"],
 ];
 

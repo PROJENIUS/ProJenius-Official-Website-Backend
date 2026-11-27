@@ -7,6 +7,8 @@ const imageSchema = new mongoose.Schema({
   mimeType: { type: String, enum: ["image/png", "image/jpeg", "image/webp"], required: true },
   size: { type: Number, required: true, max: 5 * 1024 * 1024 },
   uploadedAt: { type: Date, default: null },
+  width: { type: Number, min: 1, max: 20000, default: null },
+  height: { type: Number, min: 1, max: 20000, default: null },
   alt: { type: String, trim: true, maxlength: 180, default: "" },
 }, { _id: false, strict: "throw" });
 
@@ -27,6 +29,7 @@ const contentArticleSchema = new mongoose.Schema({
   videos: { type: [videoSchema], default: [] },
   thumbnailFilename: { type: String, default: null, match: [/^[a-f\d-]{36}\.(png|jpe?g|webp)$/i, "Invalid thumbnail filename"] },
   category: { type: String, trim: true, maxlength: 100, default: "" },
+  ctaLabel: { type: String, trim: true, maxlength: 40, default: "" },
   tags: { type: [String], default: [], validate: (items) => items.length <= 20 },
   author: { name: { type: String, trim: true, maxlength: 120, default: "" }, role: { type: String, trim: true, maxlength: 120, default: "" } },
   seo: { title: { type: String, trim: true, maxlength: 180, default: "" }, description: { type: String, trim: true, maxlength: 320, default: "" } },

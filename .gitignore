@@ -31,3 +31,5 @@ npm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+_archive-unused-*/
+backup-before-*/

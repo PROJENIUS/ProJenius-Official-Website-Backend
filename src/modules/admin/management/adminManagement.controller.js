@@ -175,7 +175,7 @@ export async function triggerPasswordReset(req, res, next) {
 }
 
 const AUDIT_CATEGORIES = {
-  signin: /^(login\.|logout$)/,
+  signin: /^(login\.|logout$|security\.)/,
   accounts: /^(account\.|permissions\.|invitation\.|password\.|password_reset\.)/,
   changes: /^activity\./,
 };

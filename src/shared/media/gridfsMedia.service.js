@@ -73,6 +73,15 @@ export async function streamStoredImage(mediaId, res, { cacheControl = "public, 
   return true;
 }
 
+/** The stored file record and its bytes, or null. Images are at most 5 MB. */
+export async function readStoredImage(mediaId) {
+  const file = await findStoredImage(mediaId);
+  if (!file) return null;
+  const chunks = [];
+  for await (const chunk of bucket().openDownloadStream(file._id)) chunks.push(chunk);
+  return { file, buffer: Buffer.concat(chunks) };
+}
+
 export async function storedImageExists(mediaId, { mimeType, size } = {}) {
   const file = await findStoredImage(mediaId);
   return Boolean(file && (!mimeType || file.metadata.mimeType === mimeType) && (size === undefined || file.length === size));

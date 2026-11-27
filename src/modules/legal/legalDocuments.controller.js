@@ -73,8 +73,8 @@ export async function getPublicLegalDocument(req, res, next) {
     if (!document) {
       document = {
         ...LEGAL_DOCUMENT_DEFAULTS[req.params.key],
-        lastUpdated: null,
-        isProvisional: true,
+        lastUpdated: LEGAL_DOCUMENT_DEFAULTS[req.params.key].effectiveAt || null,
+        isProvisional: false,
       };
     }
 
@@ -114,10 +114,11 @@ export async function getAdminLegalDocument(req, res, next) {
           .json({ item: { ...normalizedDraft, isDraft: true } });
       }
 
-      const policy = await getCurrentCoursePolicy();
+      // Nothing saved yet: start the editor from the new built-in policy text,
+      // so saving it publishes it (with a new checkout version).
       return res
         .set("Cache-Control", "no-store")
-        .json({ item: normalizeCoursePolicy(policy) });
+        .json({ item: { ...LEGAL_DOCUMENT_DEFAULTS["course-terms"], lastUpdated: null, isProvisional: true } });
     }
 
     return res

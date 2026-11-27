@@ -9,6 +9,8 @@ const receiptSchema = new mongoose.Schema({
   amountMinor: { type: Number, required: true, min: 1 },
   currency: { type: String, enum: ["INR"], required: true },
   generatedAt: { type: Date, required: true },
+  // PDF bytes kept in MongoDB because the host disk is temporary.
+  pdf: { type: Buffer, default: null, select: false },
 }, { timestamps: true, strict: "throw" });
 
 export default mongoose.models.CourseReceipt || mongoose.model("CourseReceipt", receiptSchema, "course_receipts");

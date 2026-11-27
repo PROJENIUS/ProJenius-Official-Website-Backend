@@ -45,6 +45,12 @@ export const PERMISSIONS = Object.freeze([
   "guidance:refund",
   "legal:documents:view",
   "legal:documents:edit",
+  "home:hero:view",
+  "home:hero:edit",
+  "pages:heroes:view",
+  "pages:heroes:edit",
+  "careers:openings:view",
+  "careers:openings:edit",
 ]);
 
 // New regular administrators can work with existing contact operations. The

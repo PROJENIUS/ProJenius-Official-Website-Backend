@@ -1,7 +1,7 @@
 import JobApplication from "./jobApplication.model.js";
 import { saveWithUniqueReference } from "../../shared/utilities/index.js";
 
-/** Persist a career submission using the existing job_applications model. */
+/** Persist a career submission (collection careers_job_applications). */
 export function createCareerApplication(payload, resume) {
   return saveWithUniqueReference(JobApplication, "PJ-JOB", {
     sourcePage: payload.sourcePage,

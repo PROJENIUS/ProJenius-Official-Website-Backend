@@ -7,4 +7,4 @@ const passwordResetSchema = new mongoose.Schema({
   usedAt: { type: Date, default: null },
 }, { timestamps: true });
 
-export default mongoose.models.PasswordReset || mongoose.model("PasswordReset", passwordResetSchema);
+export default mongoose.models.PasswordReset || mongoose.model("PasswordReset", passwordResetSchema, "admin_password_resets");
