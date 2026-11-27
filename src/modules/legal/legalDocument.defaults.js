@@ -161,7 +161,7 @@ export const LEGAL_DOCUMENT_DEFAULTS = Object.freeze({
       },
       {
         heading: "Third-party services on some pages",
-        body: "• Payments: course and career guidance payments open Razorpay's secure checkout, which may use cookies to process the payment and prevent fraud.\n• Maps: the Contact page and footer show a Google Map of our office. Google may set cookies when the map loads.\n• Videos: videos are embedded from YouTube in privacy-enhanced mode (youtube-nocookie.com); YouTube may store information when you play a video.\n• Fonts: fonts load from Google Fonts, which does not set cookies.\n\nEach of these services follows its own privacy and cookie policy.",
+        body: "• Payments: course and career guidance payments open Razorpay's secure checkout, which may use cookies to process the payment and prevent fraud.\n• Maps: the office map on the Contact page and in the footer is a drawing; it opens Google Maps only when you click it, and Google may then set its own cookies.\n• Videos: videos are embedded from YouTube in privacy-enhanced mode (youtube-nocookie.com); YouTube may store information when you play a video.\n• Fonts: fonts load from Google Fonts, which does not set cookies.\n\nEach of these services follows its own privacy and cookie policy.",
       },
       {
         heading: "Changing your choice",
